@@ -79,6 +79,12 @@ export class RedirectAction extends AbstractPopupRedirectOperation {
       redirectOutcomeMap.set(this.auth._key(), readyOutcome);
     }
 
+    // If we're not bypassing auth state, the ready outcome should be set to
+    // null.
+    if (!this.bypassAuthState) {
+      redirectOutcomeMap.set(this.auth._key(), () => Promise.resolve(null));
+    }
+
     return readyOutcome();
   }
 
@@ -112,9 +118,12 @@ export async function _getAndClearPendingRedirectStatus(
   auth: AuthInternal
 ): Promise<boolean> {
   const key = pendingRedirectKey(auth);
-  const hasPendingRedirect =
-    (await resolverPersistence(resolver)._get(key)) === 'true';
-  await resolverPersistence(resolver)._remove(key);
+  const persistence = resolverPersistence(resolver);
+  if (!(await persistence._isAvailable())) {
+    return false;
+  }
+  const hasPendingRedirect = (await persistence._get(key)) === 'true';
+  await persistence._remove(key);
   return hasPendingRedirect;
 }
 
@@ -127,6 +136,13 @@ export async function _setPendingRedirectStatus(
 
 export function _clearRedirectOutcomes(): void {
   redirectOutcomeMap.clear();
+}
+
+export function _overrideRedirectResult(
+  auth: AuthInternal,
+  result: () => Promise<UserCredentialInternal | null>
+): void {
+  redirectOutcomeMap.set(auth._key(), result);
 }
 
 function resolverPersistence(

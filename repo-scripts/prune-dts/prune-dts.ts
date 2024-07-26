@@ -40,10 +40,10 @@ export function pruneDts(inputLocation: string, outputLocation: string): void {
   const printer: ts.Printer = ts.createPrinter();
   const sourceFile = program.getSourceFile(inputLocation)!;
 
-  const result: ts.TransformationResult<ts.SourceFile> = ts.transform<ts.SourceFile>(
-    sourceFile,
-    [dropPrivateApiTransformer.bind(null, program, host)]
-  );
+  const result: ts.TransformationResult<ts.SourceFile> =
+    ts.transform<ts.SourceFile>(sourceFile, [
+      dropPrivateApiTransformer.bind(null, program, host)
+    ]);
   const transformedSourceFile: ts.SourceFile = result.transformed[0];
   let content = printer.printFile(transformedSourceFile);
 
@@ -108,7 +108,7 @@ export async function removeUnusedImports(
 
 /** Determines whether the provided identifier should be hidden. */
 function hasPrivatePrefix(name: ts.Identifier): boolean {
-  // Identifiers that are prefixed with an underscore are not not included in
+  // Identifiers that are prefixed with an underscore are not included in
   // the public API.
   return !!name.escapedText?.toString().startsWith('_');
 }
@@ -119,11 +119,15 @@ function isExported(
   sourceFile: ts.SourceFile,
   name: ts.Identifier
 ): boolean {
+  const declarations =
+    typeChecker.getSymbolAtLocation(name)?.declarations ?? [];
+
   // Check is this is a public symbol (e.g. part of the DOM library)
-  const sourceFileNames = typeChecker
-    .getSymbolAtLocation(name)
-    ?.declarations?.map(d => d.getSourceFile().fileName);
-  if (sourceFileNames?.find(s => s.indexOf('typescript/lib') != -1)) {
+  const isTypeScriptType = declarations.find(
+    d => d.getSourceFile().fileName.indexOf('typescript/lib') != -1
+  );
+  const isImported = declarations.find(d => ts.isImportSpecifier(d));
+  if (isTypeScriptType || isImported) {
     return true;
   }
 
@@ -137,8 +141,8 @@ function isExported(
 /**
  * Replaces an existing constructor implementation if the constructor is marked
  * with the JSDod tag `@hideconstructor`. The replaced constructor can either
- * have `private` visibility` or `proctected`. To generate a protected
- * constructor, specify `@hideconstructor proctected`.
+ * have `private` visibility` or `protected`. To generate a protected
+ * constructor, specify `@hideconstructor protected`.
  *
  * Returns either the modified constructor or the existing constructor if no
  * modification was needed.
@@ -188,6 +192,7 @@ function maybeHideConstructor(
 function prunePrivateImports<
   T extends ts.InterfaceDeclaration | ts.ClassDeclaration
 >(
+  factory: ts.NodeFactory,
   program: ts.Program,
   host: ts.CompilerHost,
   sourceFile: ts.SourceFile,
@@ -229,13 +234,13 @@ function prunePrivateImports<
 
     if (exportedTypes.length > 0) {
       prunedHeritageClauses.push(
-        ts.updateHeritageClause(heritageClause, exportedTypes)
+        factory.updateHeritageClause(heritageClause, exportedTypes)
       );
     }
   }
 
   if (ts.isClassDeclaration(node)) {
-    return ts.updateClassDeclaration(
+    return factory.updateClassDeclaration(
       node,
       node.decorators,
       node.modifiers,
@@ -248,7 +253,7 @@ function prunePrivateImports<
       ]
     ) as T;
   } else if (ts.isInterfaceDeclaration(node)) {
-    return ts.updateInterfaceDeclaration(
+    return factory.updateInterfaceDeclaration(
       node,
       node.decorators,
       node.modifiers,
@@ -335,11 +340,23 @@ function extractJSDocComment(
     }
   });
 
-  if (comments.length > 0) {
+  if (comments.length > 0 && symbol.declarations) {
     const jsDocTags = ts.getJSDocTags(symbol.declarations[overloadCount]);
     const maybeNewline = jsDocTags?.length > 0 ? '\n' : '';
+    const joinedComments = comments
+      .map(comment => {
+        if (comment.kind === 'linkText') {
+          return comment.text.trim();
+        }
+        return comment.text;
+      })
+      .join('');
+    const formattedComments = joinedComments
+      .replace('*', '\n')
+      .replace(' \n', '\n')
+      .replace('\n ', '\n');
     return ts.factory.createJSDocComment(
-      comments[0].text + maybeNewline,
+      formattedComments + maybeNewline,
       jsDocTags
     );
   }
@@ -395,19 +412,21 @@ function extractExportedSymbol(
   // See if there is an exported symbol that extends this private symbol.
   // In this case, we can safely use the public symbol instead.
   for (const symbol of allExportedSymbols) {
-    for (const declaration of symbol.declarations) {
-      if (
-        ts.isClassDeclaration(declaration) ||
-        ts.isInterfaceDeclaration(declaration)
-      ) {
-        for (const heritageClause of declaration.heritageClauses || []) {
-          for (const type of heritageClause.types || []) {
-            if (ts.isIdentifier(type.expression)) {
-              const subclassName = type.expression.escapedText;
-              if (subclassName === localSymbolName) {
-                // TODO: We may need to change this to return a Union type if
-                // more than one public type corresponds to the private type.
-                return symbol;
+    if (symbol.declarations) {
+      for (const declaration of symbol.declarations) {
+        if (
+          ts.isClassDeclaration(declaration) ||
+          ts.isInterfaceDeclaration(declaration)
+        ) {
+          for (const heritageClause of declaration.heritageClauses || []) {
+            for (const type of heritageClause.types || []) {
+              if (ts.isIdentifier(type.expression)) {
+                const subclassName = type.expression.escapedText;
+                if (subclassName === localSymbolName) {
+                  // TODO: We may need to change this to return a Union type if
+                  // more than one public type corresponds to the private type.
+                  return symbol;
+                }
               }
             }
           }
@@ -421,8 +440,8 @@ function extractExportedSymbol(
   // symbol. Note that this is not always safe as we might replace the local
   // symbol with a less restrictive type.
   const localSymbol = typeChecker.getSymbolAtLocation(typeName);
-  if (localSymbol) {
-    for (const declaration of localSymbol!.declarations) {
+  if (localSymbol?.declarations) {
+    for (const declaration of localSymbol.declarations) {
       if (
         ts.isClassDeclaration(declaration) ||
         ts.isInterfaceDeclaration(declaration)
@@ -449,6 +468,7 @@ function dropPrivateApiTransformer(
   context: ts.TransformationContext
 ): ts.Transformer<ts.SourceFile> {
   const typeChecker = program.getTypeChecker();
+  const { factory } = context;
 
   return (sourceFile: ts.SourceFile) => {
     function visit(node: ts.Node): ts.Node {
@@ -465,7 +485,7 @@ function dropPrivateApiTransformer(
         if (
           !node.modifiers?.find(m => m.kind === ts.SyntaxKind.ExportKeyword)
         ) {
-          return ts.createToken(ts.SyntaxKind.WhitespaceTrivia);
+          return factory.createNotEmittedStatement(node);
         }
       }
 
@@ -478,7 +498,7 @@ function dropPrivateApiTransformer(
       ) {
         // Remove any imports that reference internal APIs, while retaining
         // their public members.
-        return prunePrivateImports(program, host, sourceFile, node);
+        return prunePrivateImports(factory, program, host, sourceFile, node);
       } else if (
         ts.isPropertyDeclaration(node) ||
         ts.isMethodDeclaration(node) ||
@@ -487,7 +507,7 @@ function dropPrivateApiTransformer(
         // Remove any class and interface members that are prefixed with
         // underscores.
         if (hasPrivatePrefix(node.name as ts.Identifier)) {
-          return ts.createToken(ts.SyntaxKind.WhitespaceTrivia);
+          return factory.createNotEmittedStatement(node);
         }
       } else if (ts.isTypeReferenceNode(node)) {
         // For public types that refer internal types, find a public type that
@@ -498,9 +518,9 @@ function dropPrivateApiTransformer(
           node.typeName
         );
         return publicName
-          ? ts.updateTypeReferenceNode(
+          ? factory.updateTypeReferenceNode(
               node,
-              ts.createIdentifier(publicName.name),
+              factory.createIdentifier(publicName.name),
               node.typeArguments
             )
           : node;
@@ -520,16 +540,18 @@ function dropPrivateApiTransformer(
   };
 }
 
-const argv = yargs.options({
-  input: {
-    type: 'string',
-    desc: 'The location of the index.ts file'
-  },
-  output: {
-    type: 'string',
-    desc: 'The location for the index.d.ts file'
-  }
-}).parseSync();
+const argv = yargs
+  .options({
+    input: {
+      type: 'string',
+      desc: 'The location of the index.ts file'
+    },
+    output: {
+      type: 'string',
+      desc: 'The location for the index.d.ts file'
+    }
+  })
+  .parseSync();
 
 if (argv.input && argv.output) {
   console.log('Removing private exports...');

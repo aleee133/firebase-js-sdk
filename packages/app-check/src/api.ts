@@ -23,18 +23,26 @@ import {
   PartialObserver
 } from './public-types';
 import { ERROR_FACTORY, AppCheckError } from './errors';
-import { getState, setState, AppCheckState } from './state';
+import {
+  getStateReference,
+  getDebugState,
+  DEFAULT_STATE,
+  setInitialState
+} from './state';
 import { FirebaseApp, getApp, _getProvider } from '@firebase/app';
 import { getModularInstance, ErrorFn, NextFn } from '@firebase/util';
 import { AppCheckService } from './factory';
 import { AppCheckProvider, ListenerType } from './types';
 import {
   getToken as getTokenInternal,
+  getLimitedUseToken as getLimitedUseTokenInternal,
   addTokenListener,
   removeTokenListener,
-  isValid
+  isValid,
+  notifyTokenListeners
 } from './internal-api';
 import { readTokenFromStorage } from './storage';
+import { getDebugToken, initializeDebugMode, isDebugMode } from './debug';
 
 declare module '@firebase/component' {
   interface NameServiceMapping {
@@ -42,7 +50,11 @@ declare module '@firebase/component' {
   }
 }
 
-export { ReCaptchaV3Provider, CustomProvider } from './providers';
+export {
+  ReCaptchaV3Provider,
+  CustomProvider,
+  ReCaptchaEnterpriseProvider
+} from './providers';
 
 /**
  * Activate App Check for the given app. Can be called only once per app.
@@ -56,6 +68,23 @@ export function initializeAppCheck(
 ): AppCheck {
   app = getModularInstance(app);
   const provider = _getProvider(app, 'app-check');
+
+  // Ensure initializeDebugMode() is only called once.
+  if (!getDebugState().initialized) {
+    initializeDebugMode();
+  }
+
+  // Log a message containing the debug token when `initializeAppCheck()`
+  // is called in debug mode.
+  if (isDebugMode()) {
+    // Do not block initialization to get the token for the message.
+    void getDebugToken().then(token =>
+      // Not using logger because I don't think we ever want this accidentally hidden.
+      console.log(
+        `App Check debug token: ${token}. You will need to add it to your app's App Check settings in the Firebase console for it to work.`
+      )
+    );
+  }
 
   if (provider.isInitialized()) {
     const existingInstance = provider.getImmediate();
@@ -75,6 +104,17 @@ export function initializeAppCheck(
 
   const appCheck = provider.initialize({ options });
   _activate(app, options.provider, options.isTokenAutoRefreshEnabled);
+  // If isTokenAutoRefreshEnabled is false, do not send any requests to the
+  // exchange endpoint without an explicit call from the user either directly
+  // or through another Firebase library (storage, functions, etc.)
+  if (getStateReference(app).isTokenAutoRefreshEnabled) {
+    // Adding a listener will start the refresher and fetch a token if needed.
+    // This gets a token ready and prevents a delay when an internal library
+    // requests the token.
+    // Listener function does not need to do anything, its base functionality
+    // of calling getToken() already fetches token and writes it to memory/storage.
+    addTokenListener(appCheck, ListenerType.INTERNAL, () => {});
+  }
 
   return appCheck;
 }
@@ -94,13 +134,17 @@ function _activate(
   provider: AppCheckProvider,
   isTokenAutoRefreshEnabled?: boolean
 ): void {
-  const state = getState(app);
+  // Create an entry in the APP_CHECK_STATES map. Further changes should
+  // directly mutate this object.
+  const state = setInitialState(app, { ...DEFAULT_STATE });
 
-  const newState: AppCheckState = { ...state, activated: true };
-  newState.provider = provider; // Read cached token from storage if it exists and store it in memory.
-  newState.cachedTokenPromise = readTokenFromStorage(app).then(cachedToken => {
+  state.activated = true;
+  state.provider = provider; // Read cached token from storage if it exists and store it in memory.
+  state.cachedTokenPromise = readTokenFromStorage(app).then(cachedToken => {
     if (cachedToken && isValid(cachedToken)) {
-      setState(app, { ...getState(app), token: cachedToken });
+      state.token = cachedToken;
+      // notify all listeners with the cached token
+      notifyTokenListeners(app, { token: cachedToken.token });
     }
     return cachedToken;
   });
@@ -108,14 +152,12 @@ function _activate(
   // Use value of global `automaticDataCollectionEnabled` (which
   // itself defaults to false if not specified in config) if
   // `isTokenAutoRefreshEnabled` param was not provided by user.
-  newState.isTokenAutoRefreshEnabled =
+  state.isTokenAutoRefreshEnabled =
     isTokenAutoRefreshEnabled === undefined
       ? app.automaticDataCollectionEnabled
       : isTokenAutoRefreshEnabled;
 
-  setState(app, newState);
-
-  newState.provider.initialize(app);
+  state.provider.initialize(app);
 }
 
 /**
@@ -132,7 +174,7 @@ export function setTokenAutoRefreshEnabled(
   isTokenAutoRefreshEnabled: boolean
 ): void {
   const app = appCheckInstance.app;
-  const state = getState(app);
+  const state = getStateReference(app);
   // This will exist if any product libraries have called
   // `addTokenListener()`
   if (state.tokenRefresher) {
@@ -142,7 +184,7 @@ export function setTokenAutoRefreshEnabled(
       state.tokenRefresher.stop();
     }
   }
-  setState(app, { ...state, isTokenAutoRefreshEnabled });
+  state.isTokenAutoRefreshEnabled = isTokenAutoRefreshEnabled;
 }
 /**
  * Get the current App Check token. Attaches to the most recent
@@ -166,6 +208,27 @@ export async function getToken(
     throw result.error;
   }
   return { token: result.token };
+}
+
+/**
+ * Requests a Firebase App Check token. This method should be used
+ * only if you need to authorize requests to a non-Firebase backend.
+ *
+ * Returns limited-use tokens that are intended for use with your
+ * non-Firebase backend endpoints that are protected with
+ * <a href="https://firebase.google.com/docs/app-check/custom-resource-backend#replay-protection">
+ * Replay Protection</a>. This method
+ * does not affect the token generation behavior of the
+ * #getAppCheckToken() method.
+ *
+ * @param appCheckInstance - The App Check service instance.
+ * @returns The limited use token.
+ * @public
+ */
+export function getLimitedUseToken(
+  appCheckInstance: AppCheck
+): Promise<AppCheckTokenResult> {
+  return getLimitedUseTokenInternal(appCheckInstance as AppCheckService);
 }
 
 /**
@@ -196,7 +259,7 @@ export function onTokenChanged(
  * the current token associated with this App Check instance changes.
  *
  * @param appCheckInstance - The App Check service instance.
- * @param onNext - When the token changes, this function is called with aa
+ * @param onNext - When the token changes, this function is called with an
  * {@link AppCheckTokenResult}.
  * @param onError - Optional. Called if there is an error thrown by the
  * listener (the `onNext` function).

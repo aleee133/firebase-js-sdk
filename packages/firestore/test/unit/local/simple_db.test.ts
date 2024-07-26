@@ -16,16 +16,19 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import { Context } from 'mocha';
 
+import { dbKeyComparator } from '../../../src/local/indexeddb_remote_document_cache';
 import { PersistencePromise } from '../../../src/local/persistence_promise';
 import {
+  getAndroidVersion,
   SimpleDb,
   SimpleDbSchemaConverter,
   SimpleDbStore,
   SimpleDbTransaction
 } from '../../../src/local/simple_db';
+import { DocumentKey } from '../../../src/model/document_key';
 import { fail } from '../../../src/util/assert';
 import { Code, FirestoreError } from '../../../src/util/error';
 
@@ -66,13 +69,16 @@ class TestSchemaConverter implements SimpleDbSchemaConverter {
     fromVersion: number,
     toVersion: number
   ): PersistencePromise<void> {
-    const objectStore = db.createObjectStore('users', { keyPath: 'id' });
-    objectStore.createIndex('age-name', ['age', 'name'], {
+    const userStore = db.createObjectStore('users', { keyPath: 'id' });
+    userStore.createIndex('age-name', ['age', 'name'], {
       unique: false
     });
 
     // A store that uses arrays as keys.
-    db.createObjectStore('docs');
+    const docStore = db.createObjectStore('docs');
+    docStore.createIndex('path', ['prefixPath', 'collectionId', 'documentId'], {
+      unique: false
+    });
     return PersistencePromise.resolve();
   }
 }
@@ -132,7 +138,7 @@ describe('SimpleDb', () => {
       ' AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1';
     expect(SimpleDb.getIOSVersion(iPhoneSafariAgent)).to.equal(10.14);
     expect(SimpleDb.getIOSVersion(iPadSafariAgent)).to.equal(9.0);
-    expect(SimpleDb.getAndroidVersion(androidAgent)).to.equal(2.2);
+    expect(getAndroidVersion(androidAgent)).to.equal(2.2);
   });
 
   it('can get', async () => {
@@ -242,14 +248,14 @@ describe('SimpleDb', () => {
     await runTransaction(store => {
       return store.loadAll(range).next(users => {
         const expected = testData.filter(user => user.id >= 3 && user.id <= 5);
-        expect(users.length).to.deep.equal(expected.length);
+        expect(users.length).to.equal(expected.length);
         expect(users).to.deep.equal(expected);
       });
     });
     await runTransaction(store => {
       return store.loadAll().next(users => {
         const expected = testData;
-        expect(users.length).to.deep.equal(expected.length);
+        expect(users.length).to.equal(expected.length);
         expect(users).to.deep.equal(expected);
       });
     });
@@ -257,7 +263,20 @@ describe('SimpleDb', () => {
     await runTransaction(store => {
       return store.loadAll('age-name', indexRange).next(users => {
         const expected = testData.filter(user => user.id >= 3 && user.id <= 6);
-        expect(users.length).to.deep.equal(expected.length);
+        expect(users.length).to.equal(expected.length);
+        expect(users).to.deep.equal(expected);
+      });
+    });
+  });
+
+  it('loadFirst', async () => {
+    const range = IDBKeyRange.bound(3, 8);
+    await runTransaction(store => {
+      return store.loadFirst(range, 2).next(users => {
+        const expected = testData
+          .filter(user => user.id >= 3 && user.id <= 5)
+          .slice(0, 2);
+        expect(users.length).to.equal(expected.length);
         expect(users).to.deep.equal(expected);
       });
     });
@@ -286,7 +305,7 @@ describe('SimpleDb', () => {
         })
         .next(users => {
           const expected = testData.filter(user => user.id < 3 || user.id > 5);
-          expect(users.length).to.deep.equal(expected.length);
+          expect(users.length).to.equal(expected.length);
           expect(users).to.deep.equal(expected);
         });
     });
@@ -302,7 +321,7 @@ describe('SimpleDb', () => {
         })
         .next(users => {
           const expected = testData.filter(user => user.id < 3 || user.id > 6);
-          expect(users.length).to.deep.equal(expected.length);
+          expect(users.length).to.equal(expected.length);
           expect(users).to.deep.equal(expected);
         });
     });
@@ -512,6 +531,73 @@ describe('SimpleDb', () => {
       }
     );
   });
+
+  // Note: This tests is failing under `IndexedDBShim`.
+  // eslint-disable-next-line no-restricted-properties
+  (isIndexedDbMock() ? it.skip : it)(
+    'correctly sorts keys with nested arrays',
+    async function (this: Context) {
+      // This test verifies that the sorting in IndexedDb matches
+      // `dbKeyComparator()`
+
+      const keys = [
+        'a/a/a/a/a/a/a/a/a/a',
+        'a/b/a/a/a/a/a/a/a/b',
+        'b/a/a/a/a/a/a/a/a/a',
+        'b/b/a/a/a/a/a/a/a/b',
+        'b/b/a/a/a/a/a/a',
+        'b/b/b/a/a/a/a/b',
+        'c/c/a/a/a/a',
+        'd/d/a/a',
+        'e/e'
+      ].map(k => DocumentKey.fromPath(k));
+
+      interface ValueType {
+        prefixPath: string[];
+        collectionId: string;
+        documentId: string;
+      }
+
+      const expectedOrder = [...keys];
+      expectedOrder.sort(dbKeyComparator);
+
+      const actualOrder = await db.runTransaction(
+        this.test!.fullTitle(),
+        'readwrite',
+        ['docs'],
+        txn => {
+          const store = txn.store<string[], ValueType>('docs');
+
+          const writes = keys.map(k => {
+            const path = k.path.toArray();
+            return store.put(k.path.toArray(), {
+              prefixPath: path.slice(0, path.length - 2),
+              collectionId: path[path.length - 2],
+              documentId: path[path.length - 1]
+            });
+          });
+
+          return PersistencePromise.waitFor(writes).next(() =>
+            store
+              .loadAll('path')
+              .next(keys =>
+                keys.map(k =>
+                  DocumentKey.fromSegments([
+                    ...k.prefixPath,
+                    k.collectionId,
+                    k.documentId
+                  ])
+                )
+              )
+          );
+        }
+      );
+
+      expect(actualOrder.map(k => k.toString())).to.deep.equal(
+        expectedOrder.map(k => k.toString())
+      );
+    }
+  );
 
   it('retries transactions', async function (this: Context) {
     let attemptCount = 0;

@@ -17,7 +17,7 @@
 
 import { expect, use } from 'chai';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 import {
   _EventType,
   PingRequest,
@@ -37,7 +37,7 @@ describe('platform_browser/messagechannel/receiver', () => {
   let messageChannel: MessageChannel;
 
   beforeEach(() => {
-    serviceWorker = (new FakeServiceWorker() as unknown) as ServiceWorker;
+    serviceWorker = new FakeServiceWorker() as unknown as ServiceWorker;
     receiver = Receiver._getInstance(serviceWorker);
     messageChannel = new MessageChannel();
   });

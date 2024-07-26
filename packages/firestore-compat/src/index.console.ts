@@ -21,8 +21,12 @@ import {
   _DatabaseId,
   Firestore as FirestoreExp,
   FirestoreError,
-  _EmptyCredentialsProvider
+  _EmptyAuthCredentialsProvider,
+  _EmptyAppCheckTokenProvider,
+  Query as ExpQuery,
+  getCountFromServer
 } from '@firebase/firestore';
+import { Compat } from '@firebase/util';
 
 import {
   Firestore as FirestoreCompat,
@@ -90,12 +94,26 @@ export class Firestore extends FirestoreCompat {
     super(
       databaseIdFromFirestoreDatabase(firestoreDatabase),
       new FirestoreExp(
-        databaseIdFromFirestoreDatabase(firestoreDatabase),
-        new _EmptyCredentialsProvider()
+        new _EmptyAuthCredentialsProvider(),
+        new _EmptyAppCheckTokenProvider(),
+        databaseIdFromFirestoreDatabase(firestoreDatabase)
       ),
       new MemoryPersistenceProvider()
     );
   }
+
+  INTERNAL = {
+    delete: () => this.terminate(),
+    count: (query: Compat<ExpQuery<unknown>>) => {
+      return getCountFromServer(query._delegate)
+        .then(response => {
+          return response.data().count;
+        })
+        .catch(error => {
+          throw new FirestoreError(error.code, error.message);
+        });
+    }
+  };
 }
 
 function databaseIdFromFirestoreDatabase(

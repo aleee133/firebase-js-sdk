@@ -18,9 +18,15 @@
 import {
   FirebaseApp,
   initializeApp,
+  _addOrOverwriteComponent,
   _registerComponent
 } from '@firebase/app';
-import { GreCAPTCHA, RECAPTCHA_URL } from '../src/recaptcha';
+import {
+  GreCAPTCHA,
+  GreCAPTCHATopLevel,
+  RECAPTCHA_ENTERPRISE_URL,
+  RECAPTCHA_URL
+} from '../src/recaptcha';
 import {
   Provider,
   ComponentContainer,
@@ -29,6 +35,7 @@ import {
 } from '@firebase/component';
 import { AppCheckService } from '../src/factory';
 import { AppCheck, CustomProvider } from '../src';
+import { HeartbeatService } from '@firebase/app/dist/app/src/types';
 
 export const FAKE_SITE_KEY = 'fake-site-key';
 
@@ -54,17 +61,21 @@ export function getFakeApp(overrides: Record<string, any> = {}): FirebaseApp {
 export function getFakeAppCheck(app: FirebaseApp): AppCheck {
   return {
     app,
-    platformLoggerProvider: getFakePlatformLoggingProvider()
+    heartbeatServiceProvider: getFakeHeartbeatServiceProvider()
   } as AppCheck;
 }
 
 export function getFullApp(): FirebaseApp {
   const app = initializeApp(fakeConfig);
-  _registerComponent(
+  _addOrOverwriteComponent(
+    app,
+    //@ts-ignore
     new Component(
-      'platform-logger',
+      'heartbeat',
       () => {
-        return {} as any;
+        return {
+          triggerHeartbeat: () => {}
+        } as any;
       },
       ComponentType.PUBLIC
     )
@@ -91,27 +102,37 @@ export function getFakeCustomTokenProvider(): CustomProvider {
   });
 }
 
-export function getFakePlatformLoggingProvider(
+export function getFakeHeartbeatServiceProvider(
   fakeLogString: string = 'a/1.2.3 b/2.3.4'
-): Provider<'platform-logger'> {
+): Provider<'heartbeat'> {
   const container = new ComponentContainer('test');
   container.addComponent(
     new Component(
-      'platform-logger',
-      () => ({ getPlatformInfoString: () => fakeLogString }),
+      'heartbeat',
+      () =>
+        ({
+          getHeartbeatsHeader: () => Promise.resolve(fakeLogString)
+        } as HeartbeatService),
       ComponentType.PRIVATE
     )
   );
 
-  return container.getProvider('platform-logger');
+  return container.getProvider('heartbeat');
 }
 
-export function getFakeGreCAPTCHA(): GreCAPTCHA {
-  return {
+export function getFakeGreCAPTCHA(
+  isTopLevel: boolean = true
+): GreCAPTCHATopLevel | GreCAPTCHA {
+  const greCaptchaTopLevel: GreCAPTCHA = {
     ready: callback => callback(),
     render: (_container, _parameters) => 'fake_widget_1',
     execute: (_siteKey, _options) => Promise.resolve('fake_recaptcha_token')
   };
+  if (isTopLevel) {
+    (greCaptchaTopLevel as GreCAPTCHATopLevel).enterprise =
+      getFakeGreCAPTCHA(false);
+  }
+  return greCaptchaTopLevel;
 }
 
 /**
@@ -123,7 +144,11 @@ export function findgreCAPTCHAScriptsOnPage(): HTMLScriptElement[] {
   const scriptTags = window.document.getElementsByTagName('script');
   const tags = [];
   for (const tag of Object.values(scriptTags)) {
-    if (tag.src && tag.src.includes(RECAPTCHA_URL)) {
+    if (
+      tag.src &&
+      (tag.src.includes(RECAPTCHA_URL) ||
+        tag.src.includes(RECAPTCHA_ENTERPRISE_URL))
+    ) {
       tags.push(tag);
     }
   }

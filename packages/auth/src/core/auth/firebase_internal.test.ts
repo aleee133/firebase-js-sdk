@@ -18,7 +18,7 @@
 import { FirebaseError } from '@firebase/util';
 import { expect, use } from 'chai';
 import * as sinon from 'sinon';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 
 import { testAuth, testUser } from '../../../test/helpers/mock_auth';
 import { AuthInternal } from '../../model/auth';
@@ -51,7 +51,7 @@ describe('core/auth/firebase_internal', () => {
     });
 
     it('errors if Auth is not initialized', () => {
-      delete ((auth as unknown) as Record<string, unknown>)[
+      delete (auth as unknown as Record<string, unknown>)[
         '_initializationPromise'
       ];
       expect(() => authInternal.getUid()).to.throw(
@@ -78,7 +78,7 @@ describe('core/auth/firebase_internal', () => {
     });
 
     it('errors if Auth is not initialized', async () => {
-      delete ((auth as unknown) as Record<string, unknown>)[
+      delete (auth as unknown as Record<string, unknown>)[
         '_initializationPromise'
       ];
       await expect(authInternal.getToken()).to.be.rejectedWith(
@@ -141,7 +141,7 @@ describe('core/auth/firebase_internal', () => {
       });
 
       it('errors if Auth is not initialized', () => {
-        delete ((auth as unknown) as Record<string, unknown>)[
+        delete (auth as unknown as Record<string, unknown>)[
           '_initializationPromise'
         ];
         expect(() => authInternal.addAuthTokenListener(() => {})).to.throw(
@@ -204,7 +204,7 @@ describe('core/auth/firebase_internal', () => {
       });
 
       it('errors if Auth is not initialized', () => {
-        delete ((auth as unknown) as Record<string, unknown>)[
+        delete (auth as unknown as Record<string, unknown>)[
           '_initializationPromise'
         ];
         expect(() => authInternal.removeAuthTokenListener(() => {})).to.throw(

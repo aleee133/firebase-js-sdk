@@ -62,6 +62,7 @@ describe('Firebase Performance > oob_resources_service', () => {
     responseEnd: 9.305000072345138,
     responseStart: 8.940000087022781,
     secureConnectionStart: 0,
+    serverTiming: [],
     startTime: 0,
     transferSize: 1259,
     type: 'reload',
@@ -109,11 +110,11 @@ describe('Firebase Performance > oob_resources_service', () => {
     appId: '1:111:web:a1234'
   };
 
-  const fakeFirebaseApp = ({
+  const fakeFirebaseApp = {
     options: fakeFirebaseConfig
-  } as unknown) as FirebaseApp;
+  } as unknown as FirebaseApp;
 
-  const fakeInstallations = ({} as unknown) as FirebaseInstallations;
+  const fakeInstallations = {} as unknown as FirebaseInstallations;
   const performanceController = new PerformanceController(
     fakeFirebaseApp,
     fakeInstallations
@@ -194,7 +195,7 @@ describe('Firebase Performance > oob_resources_service', () => {
       getIidStub.returns(MOCK_ID);
       const api = Api.getInstance();
       const FIRST_INPUT_DELAY = 123;
-      // Underscore is to avoid compiler comlaining about variable being declared but not used.
+      // Underscore is to avoid compiler complaining about variable being declared but not used.
       type FirstInputDelayCallback = (firstInputDelay: number) => void;
       let firstInputDelayCallback: FirstInputDelayCallback = (): void => {};
       //@ts-ignore Assignment to read-only property.

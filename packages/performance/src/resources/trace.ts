@@ -123,7 +123,7 @@ export class Trace implements PerformanceTrace {
    * Records a trace with predetermined values. If this method is used a trace is created and logged
    * directly. No need to use start and stop methods.
    * @param startTime Trace start time since epoch in millisec
-   * @param duration The duraction of the trace in millisec
+   * @param duration The duration of the trace in millisec
    * @param options An object which can optionally hold maps of custom metrics and custom attributes
    */
   record(
@@ -151,9 +151,11 @@ export class Trace implements PerformanceTrace {
       this.customAttributes = { ...options.attributes };
     }
     if (options && options.metrics) {
-      for (const metric of Object.keys(options.metrics)) {
-        if (!isNaN(Number(options.metrics[metric]))) {
-          this.counters[metric] = Number(Math.floor(options.metrics[metric]));
+      for (const metricName of Object.keys(options.metrics)) {
+        if (!isNaN(Number(options.metrics[metricName]))) {
+          this.counters[metricName] = Math.floor(
+            Number(options.metrics[metricName])
+          );
         }
       }
     }
@@ -183,7 +185,7 @@ export class Trace implements PerformanceTrace {
    */
   putMetric(counter: string, numAsInteger: number): void {
     if (isValidMetricName(counter, this.name)) {
-      this.counters[counter] = convertMetricValueToInteger(numAsInteger);
+      this.counters[counter] = convertMetricValueToInteger(numAsInteger ?? 0);
     } else {
       throw ERROR_FACTORY.create(ErrorCode.INVALID_CUSTOM_METRIC_NAME, {
         customMetricName: counter

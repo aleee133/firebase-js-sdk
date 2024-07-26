@@ -16,9 +16,9 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 
 import { FirebaseError } from '@firebase/util';
 
@@ -161,7 +161,7 @@ describe('platform_browser/recaptcha/recaptcha_mock', () => {
           'expired-callback': sinon.spy()
         };
         pendingTimers = stubTimeouts();
-        timeoutStub = (window.setTimeout as unknown) as sinon.SinonStub;
+        timeoutStub = window.setTimeout as unknown as sinon.SinonStub;
         widget = new MockWidget(container, auth.name, callbacks);
       });
 

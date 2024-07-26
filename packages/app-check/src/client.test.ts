@@ -19,15 +19,22 @@ import '../test/setup';
 import { expect } from 'chai';
 import { stub, SinonStub, useFakeTimers } from 'sinon';
 import { FirebaseApp } from '@firebase/app';
-import { getFakeApp, getFakePlatformLoggingProvider } from '../test/util';
-import { getExchangeRecaptchaTokenRequest, exchangeToken } from './client';
+import { getFakeApp, getFakeHeartbeatServiceProvider } from '../test/util';
+import {
+  getExchangeRecaptchaV3TokenRequest,
+  exchangeToken,
+  getExchangeRecaptchaEnterpriseTokenRequest
+} from './client';
 import { FirebaseError } from '@firebase/util';
 import { ERROR_FACTORY, AppCheckError } from './errors';
 import { BASE_ENDPOINT } from './constants';
 
 describe('client', () => {
   let app: FirebaseApp;
-  let fetchStub: SinonStub<[RequestInfo, RequestInit?], Promise<Response>>;
+  let fetchStub: SinonStub<
+    [RequestInfo | URL, RequestInit?],
+    Promise<Response>
+  >;
   beforeEach(() => {
     app = getFakeApp();
     fetchStub = stub(window, 'fetch').returns(
@@ -36,17 +43,33 @@ describe('client', () => {
   });
 
   it('creates exchange recaptcha token request correctly', () => {
-    const request = getExchangeRecaptchaTokenRequest(
+    const request = getExchangeRecaptchaV3TokenRequest(
       app,
       'fake-recaptcha-token'
     );
     const { projectId, appId, apiKey } = app.options;
 
     expect(request).to.deep.equal({
-      url: `${BASE_ENDPOINT}/projects/${projectId}/apps/${appId}:exchangeRecaptchaToken?key=${apiKey}`,
+      url: `${BASE_ENDPOINT}/projects/${projectId}/apps/${appId}:exchangeRecaptchaV3Token?key=${apiKey}`,
       body: {
         // eslint-disable-next-line camelcase
-        recaptcha_token: 'fake-recaptcha-token'
+        recaptcha_v3_token: 'fake-recaptcha-token'
+      }
+    });
+  });
+
+  it('creates exchange recaptcha enterprise token request correctly', () => {
+    const request = getExchangeRecaptchaEnterpriseTokenRequest(
+      app,
+      'fake-recaptcha-token'
+    );
+    const { projectId, appId, apiKey } = app.options;
+
+    expect(request).to.deep.equal({
+      url: `${BASE_ENDPOINT}/projects/${projectId}/apps/${appId}:exchangeRecaptchaEnterpriseToken?key=${apiKey}`,
+      body: {
+        // eslint-disable-next-line camelcase
+        recaptcha_enterprise_token: 'fake-recaptcha-token'
       }
     });
   });
@@ -58,15 +81,15 @@ describe('client', () => {
       Promise.resolve({
         status: 200,
         json: async () => ({
-          attestationToken: 'fake-appcheck-token',
+          token: 'fake-appcheck-token',
           ttl: '3.600s'
         })
       } as Response)
     );
 
     const response = await exchangeToken(
-      getExchangeRecaptchaTokenRequest(app, 'fake-custom-token'),
-      getFakePlatformLoggingProvider('a/1.2.3 fire-app-check/2.3.4')
+      getExchangeRecaptchaV3TokenRequest(app, 'fake-custom-token'),
+      getFakeHeartbeatServiceProvider('a/1.2.3 fire-app-check/2.3.4')
     );
 
     expect(
@@ -87,14 +110,14 @@ describe('client', () => {
     const firebaseError = ERROR_FACTORY.create(
       AppCheckError.FETCH_NETWORK_ERROR,
       {
-        originalErrorMessage: originalError.message
+        originalErrorMessage: (originalError as Error)?.message
       }
     );
 
     try {
       await exchangeToken(
-        getExchangeRecaptchaTokenRequest(app, 'fake-custom-token'),
-        getFakePlatformLoggingProvider()
+        getExchangeRecaptchaV3TokenRequest(app, 'fake-custom-token'),
+        getFakeHeartbeatServiceProvider()
       );
     } catch (e) {
       expect(e).instanceOf(FirebaseError);
@@ -122,8 +145,8 @@ describe('client', () => {
 
     try {
       await exchangeToken(
-        getExchangeRecaptchaTokenRequest(app, 'fake-custom-token'),
-        getFakePlatformLoggingProvider()
+        getExchangeRecaptchaV3TokenRequest(app, 'fake-custom-token'),
+        getFakeHeartbeatServiceProvider()
       );
     } catch (e) {
       expect(e).instanceOf(FirebaseError);
@@ -144,21 +167,21 @@ describe('client', () => {
     const firebaseError = ERROR_FACTORY.create(
       AppCheckError.FETCH_PARSE_ERROR,
       {
-        originalErrorMessage: originalError.message
+        originalErrorMessage: (originalError as Error)?.message
       }
     );
 
     try {
       await exchangeToken(
-        getExchangeRecaptchaTokenRequest(app, 'fake-custom-token'),
-        getFakePlatformLoggingProvider()
+        getExchangeRecaptchaV3TokenRequest(app, 'fake-custom-token'),
+        getFakeHeartbeatServiceProvider()
       );
     } catch (e) {
       expect(e).instanceOf(FirebaseError);
       expect(e).has.property('message', firebaseError.message);
       expect(e).has.nested.property(
         'customData.originalErrorMessage',
-        originalError.message
+        (originalError as Error)?.message
       );
     }
   });
@@ -169,7 +192,7 @@ describe('client', () => {
         status: 200,
         json: () =>
           Promise.resolve({
-            attestationToken: 'fake-appcheck-token',
+            token: 'fake-appcheck-token',
             ttl: 'NAN'
           })
       } as Response)
@@ -184,8 +207,8 @@ describe('client', () => {
 
     try {
       await exchangeToken(
-        getExchangeRecaptchaTokenRequest(app, 'fake-custom-token'),
-        getFakePlatformLoggingProvider()
+        getExchangeRecaptchaV3TokenRequest(app, 'fake-custom-token'),
+        getFakeHeartbeatServiceProvider()
       );
     } catch (e) {
       expect(e).instanceOf(FirebaseError);

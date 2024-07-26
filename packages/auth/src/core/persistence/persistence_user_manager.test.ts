@@ -18,7 +18,7 @@
 import * as chai from 'chai';
 import { expect } from 'chai';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 
 import { testAuth, testUser, TestAuth } from '../../../test/helpers/mock_auth';
 import { UserImpl } from '../user/user_impl';
@@ -297,7 +297,7 @@ describe('core/persistence/persistence_user_manager', () => {
         spy.restore();
       });
 
-      it('removes current user & sets it in the new persistene', async () => {
+      it('removes current user & sets it in the new persistence', async () => {
         const { persistence: nextPersistence, stub: nextStub } =
           makePersistence();
         const auth = await testAuth();

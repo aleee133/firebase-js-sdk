@@ -27,7 +27,6 @@ import {
   SDK_VERSION
 } from '@firebase/app';
 
-import { ConnectionPool } from '../src/implementation/connectionPool';
 import { FirebaseStorageImpl } from '../src/service';
 import {
   Component,
@@ -41,8 +40,8 @@ import { name, version } from '../package.json';
 import { FirebaseStorage } from './public-types';
 import { STORAGE_TYPE } from './constants';
 
-export { StringFormat } from '../src/implementation/string';
 export * from './api';
+export * from './api.browser';
 
 function factory(
   container: ComponentContainer,
@@ -56,7 +55,6 @@ function factory(
     app,
     authProvider,
     appCheckProvider,
-    new ConnectionPool(),
     url,
     SDK_VERSION
   );
@@ -70,8 +68,10 @@ function registerStorage(): void {
       ComponentType.PUBLIC
     ).setMultipleInstances(true)
   );
-
-  registerVersion(name, version);
+  //RUNTIME_ENV will be replaced during the compilation to "node" for nodejs and an empty string for browser
+  registerVersion(name, version, '__RUNTIME_ENV__');
+  // BUILD_TARGET will be replaced by values like esm5, esm2017, cjs5, etc during the compilation
+  registerVersion(name, version, '__BUILD_TARGET__');
 }
 
 registerStorage();

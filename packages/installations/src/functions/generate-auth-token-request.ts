@@ -34,24 +34,28 @@ import {
 } from '../interfaces/installation-impl';
 
 export async function generateAuthTokenRequest(
-  { appConfig, platformLoggerProvider }: FirebaseInstallationsImpl,
+  { appConfig, heartbeatServiceProvider }: FirebaseInstallationsImpl,
   installationEntry: RegisteredInstallationEntry
 ): Promise<CompletedAuthToken> {
   const endpoint = getGenerateAuthTokenEndpoint(appConfig, installationEntry);
 
   const headers = getHeadersWithAuth(appConfig, installationEntry);
 
-  // If platform logger exists, add the platform info string to the header.
-  const platformLogger = platformLoggerProvider.getImmediate({
+  // If heartbeat service exists, add the heartbeat string to the header.
+  const heartbeatService = heartbeatServiceProvider.getImmediate({
     optional: true
   });
-  if (platformLogger) {
-    headers.append('x-firebase-client', platformLogger.getPlatformInfoString());
+  if (heartbeatService) {
+    const heartbeatsHeader = await heartbeatService.getHeartbeatsHeader();
+    if (heartbeatsHeader) {
+      headers.append('x-firebase-client', heartbeatsHeader);
+    }
   }
 
   const body = {
     installation: {
-      sdkVersion: PACKAGE_VERSION
+      sdkVersion: PACKAGE_VERSION,
+      appId: appConfig.appId
     }
   };
 
@@ -64,9 +68,8 @@ export async function generateAuthTokenRequest(
   const response = await retryIfServerError(() => fetch(endpoint, request));
   if (response.ok) {
     const responseValue: GenerateAuthTokenResponse = await response.json();
-    const completedAuthToken: CompletedAuthToken = extractAuthTokenInfoFromResponse(
-      responseValue
-    );
+    const completedAuthToken: CompletedAuthToken =
+      extractAuthTokenInfoFromResponse(responseValue);
     return completedAuthToken;
   } else {
     throw await getErrorFromResponse('Generate Auth Token', response);

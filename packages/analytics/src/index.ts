@@ -1,5 +1,6 @@
 /**
- * Firebase Analytics
+ * The Firebase Analytics Web SDK.
+ * This SDK does not work in a Node.js environment.
  *
  * @packageDocumentation
  */
@@ -65,6 +66,8 @@ function registerAnalytics(): void {
   );
 
   registerVersion(name, version);
+  // BUILD_TARGET will be replaced by values like esm5, esm2017, cjs5, etc during the compilation
+  registerVersion(name, version, '__BUILD_TARGET__');
 
   function internalFactory(
     container: ComponentContainer
@@ -80,7 +83,7 @@ function registerAnalytics(): void {
       };
     } catch (e) {
       throw ERROR_FACTORY.create(AnalyticsError.INTEROP_COMPONENT_REG_FAILED, {
-        reason: e
+        reason: e as Error
       });
     }
   }

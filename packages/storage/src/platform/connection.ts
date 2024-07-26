@@ -15,9 +15,37 @@
  * limitations under the License.
  */
 import { Connection } from '../implementation/connection';
-import { newConnection as nodeNewConnection } from './node/connection';
+import {
+  newTextConnection as nodeNewTextConnection,
+  newBytesConnection as nodeNewBytesConnection,
+  newBlobConnection as nodeNewBlobConnection,
+  newStreamConnection as nodeNewStreamConnection,
+  injectTestConnection as nodeInjectTestConnection
+} from './node/connection';
 
-export function newConnection(): Connection {
+export function injectTestConnection(
+  factory: (() => Connection<string>) | null
+): void {
   // This file is only used under ts-node.
-  return nodeNewConnection();
+  nodeInjectTestConnection(factory);
+}
+
+export function newTextConnection(): Connection<string> {
+  // This file is only used under ts-node.
+  return nodeNewTextConnection();
+}
+
+export function newBytesConnection(): Connection<ArrayBuffer> {
+  // This file is only used in Node.js tests using ts-node.
+  return nodeNewBytesConnection();
+}
+
+export function newBlobConnection(): Connection<Blob> {
+  // This file is only used in Node.js tests using ts-node.
+  return nodeNewBlobConnection();
+}
+
+export function newStreamConnection(): Connection<NodeJS.ReadableStream> {
+  // This file is only used in Node.js tests using ts-node.
+  return nodeNewStreamConnection();
 }

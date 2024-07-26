@@ -18,11 +18,16 @@
 import strip from '@rollup/plugin-strip';
 import typescriptPlugin from 'rollup-plugin-typescript2';
 import json from '@rollup/plugin-json';
+import replace from 'rollup-plugin-replace';
 import typescript from 'typescript';
 import alias from '@rollup/plugin-alias';
+import { generateBuildTargetReplaceConfig } from '../../scripts/build/rollup_replace_build_target';
+import { emitModulePackageFile } from '../../scripts/build/rollup_emit_module_package_file';
 import pkg from './package.json';
 
-const deps = Object.keys(Object.assign({}, pkg.peerDependencies, pkg.dependencies));
+const deps = Object.keys(
+  Object.assign({}, pkg.peerDependencies, pkg.dependencies)
+);
 
 /**
  * Node has the same entry point as browser, but browser-specific exports
@@ -30,143 +35,204 @@ const deps = Object.keys(Object.assign({}, pkg.peerDependencies, pkg.dependencie
  * more info. This regex tests explicitly ./src/platform_browser so that the
  * only impacted file is the main index.ts
  */
- const nodeAliasPlugin = alias({
-    entries: [
-      {
-        find: /^\.\/src\/platform_browser(\/.*)?$/,
-        replacement: `./src/platform_node`
-      }
-    ]
-  });
-/**
- * ES5 Builds
- */
+const nodeAliasPlugin = alias({
+  entries: [
+    {
+      find: /^\.\/src\/platform_browser(\/.*)?$/,
+      replacement: `./src/platform_node`
+    }
+  ]
+});
+
 const es5BuildPlugins = [
-    json(),
-    strip({
-        functions: ['debugAssert.*']
-    }),
-    typescriptPlugin({
-        typescript
-    })
+  json(),
+  strip({
+    functions: ['debugAssert.*']
+  }),
+  typescriptPlugin({
+    typescript
+  })
 ];
 
-const es5Builds = [
-    /**
-     * Browser Builds
-     */
-    {
-        input: {
-            index: 'index.ts',
-            internal: 'internal/index.ts'
-        },
-        output: [{ dir: 'dist/esm5', format: 'esm', sourcemap: true }],
-        plugins: es5BuildPlugins,
-        external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
-    },
-    /**
-     * Web Worker Build (compiled without DOM)
-     */
-    {
-        input: 'index.webworker.ts',
-        output: [{ file: pkg.webworker, format: 'es', sourcemap: true }],
-        plugins: [
-            json(),
-            strip({
-                functions: ['debugAssert.*']
-            }),
-            typescriptPlugin({
-                typescript,
-                compilerOptions: {
-                    lib: [
-                        // Remove dom after we figure out why navigator stuff doesn't exist
-                        'dom',
-                        'es2015',
-                        'webworker'
-                    ]
-                }
-
-            })
-        ],
-        external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
-    },
-    /**
-     * Node.js Build
-     */
-    {
-        input: {
-            index: 'index.node.ts',
-            internal: 'internal/index.ts'
-        },
-        output: [{ dir: 'dist/node', format: 'cjs', sourcemap: true }],
-        plugins: [nodeAliasPlugin, ...es5BuildPlugins],
-        external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
-    },
-    /**
-     * Cordova Builds
-     */
-    {
-        input: {
-            index: 'index.cordova.ts',
-            internal: 'internal/index.ts'
-        },
-        output: [{ dir: 'dist/cordova', format: 'es', sourcemap: true }],
-        plugins: es5BuildPlugins,
-        external: id =>
-            [...deps, 'cordova'].some(dep => id === dep || id.startsWith(`${dep}/`))
-    },
-    /**
-     * React Native Builds
-     */
-    {
-        input: {
-            index: 'index.rn.ts',
-            internal: 'internal/index.ts'
-        },
-        output: [{ dir: 'dist/rn', format: 'cjs', sourcemap: true }],
-        plugins: es5BuildPlugins,
-        external: id =>
-            [...deps, 'react-native'].some(
-                dep => id === dep || id.startsWith(`${dep}/`)
-            )
-    }
-];
-
-/**
- * ES2017 Builds
- */
 const es2017BuildPlugins = [
+  json(),
+  strip({
+    functions: ['debugAssert.*']
+  }),
+  typescriptPlugin({
+    typescript,
+    tsconfigOverride: {
+      compilerOptions: {
+        target: 'es2017'
+      }
+    }
+  })
+];
+
+const browserBuilds = [
+  {
+    input: {
+      index: 'index.ts',
+      internal: 'internal/index.ts'
+    },
+    output: [{ dir: 'dist/esm5', format: 'es', sourcemap: true }],
+    plugins: [
+      ...es5BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('esm', 5))
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  },
+  {
+    input: {
+      index: 'index.ts',
+      internal: 'internal/index.ts'
+    },
+    output: {
+      dir: 'dist/esm2017',
+      format: 'es',
+      sourcemap: true
+    },
+    plugins: [
+      ...es2017BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('esm', 2017))
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  },
+  {
+    input: {
+      index: 'index.ts',
+      internal: 'internal/index.ts'
+    },
+    output: [{ dir: 'dist/browser-cjs', format: 'cjs', sourcemap: true }],
+    plugins: [
+      ...es2017BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('cjs', 2017))
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  }
+];
+
+const browserWebExtensionBuilds = [
+  {
+    input: {
+      index: 'index.web-extension.ts',
+      internal: 'internal/index.ts'
+    },
+    output: {
+      dir: 'dist/web-extension-esm2017',
+      format: 'es',
+      sourcemap: true
+    },
+    plugins: [
+      ...es2017BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('esm', 2017)),
+      emitModulePackageFile()
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  },
+  {
+    input: {
+      index: 'index.web-extension.ts',
+      internal: 'internal/index.ts'
+    },
+    output: [{ dir: 'dist/web-extension-cjs', format: 'cjs', sourcemap: true }],
+    plugins: [
+      ...es2017BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('cjs', 2017))
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  }
+];
+
+const nodeBuilds = [
+  {
+    input: {
+      index: 'index.node.ts',
+      internal: 'internal/index.ts'
+    },
+    output: [{ dir: 'dist/node', format: 'cjs', sourcemap: true }],
+    plugins: [
+      nodeAliasPlugin,
+      ...es5BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('cjs', 5))
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  },
+  {
+    input: {
+      index: 'index.node.ts',
+      internal: 'internal/index.ts'
+    },
+    output: [{ dir: 'dist/node-esm', format: 'es', sourcemap: true }],
+    plugins: [
+      nodeAliasPlugin,
+      ...es2017BuildPlugins,
+      replace(generateBuildTargetReplaceConfig('esm', 2017)),
+      emitModulePackageFile()
+    ],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+  }
+];
+
+const cordovaBuild = {
+  input: {
+    index: 'index.cordova.ts',
+    internal: 'internal/index.ts'
+  },
+  output: [{ dir: 'dist/cordova', format: 'es', sourcemap: true }],
+  plugins: [
+    ...es5BuildPlugins,
+    replace(generateBuildTargetReplaceConfig('esm', 5))
+  ],
+  external: id =>
+    [...deps, 'cordova'].some(dep => id === dep || id.startsWith(`${dep}/`))
+};
+
+const rnBuild = {
+  input: {
+    index: 'index.rn.ts',
+    internal: 'internal/index.ts'
+  },
+  output: [{ dir: 'dist/rn', format: 'cjs', sourcemap: true }],
+  plugins: [
+    ...es5BuildPlugins,
+    replace(generateBuildTargetReplaceConfig('cjs', 5))
+  ],
+  external: id =>
+    [...deps, 'react-native'].some(
+      dep => id === dep || id.startsWith(`${dep}/`)
+    )
+};
+
+const webWorkerBuild = {
+  input: 'index.webworker.ts',
+  output: [{ file: pkg.webworker, format: 'es', sourcemap: true }],
+  plugins: [
     json(),
     strip({
-        functions: ['debugAssert.*']
+      functions: ['debugAssert.*']
     }),
     typescriptPlugin({
-        typescript,
-        tsconfigOverride: {
-            compilerOptions: {
-                target: 'es2017'
-            }
-        }
-    })
-];
+      typescript,
+      compilerOptions: {
+        lib: [
+          // Remove dom after we figure out why navigator stuff doesn't exist
+          'dom',
+          'es2015',
+          'webworker'
+        ]
+      }
+    }),
+    replace(generateBuildTargetReplaceConfig('esm', 5))
+  ],
+  external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
+};
 
-const es2017Builds = [
-    /**
-     *  Browser Builds
-     */
-    {
-        input: {
-            index: 'index.ts',
-            internal: 'internal/index.ts'
-        },
-        output: {
-            dir: 'dist/esm2017',
-            format: 'es',
-            sourcemap: true
-        },
-        plugins: es2017BuildPlugins,
-        external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`))
-    }
+export default [
+  ...browserBuilds,
+  ...browserWebExtensionBuilds,
+  ...nodeBuilds,
+  cordovaBuild,
+  rnBuild,
+  webWorkerBuild
 ];
-
-export default [...es5Builds, ...es2017Builds];

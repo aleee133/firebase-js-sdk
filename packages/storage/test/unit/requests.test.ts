@@ -32,12 +32,12 @@ import {
   getResumableUploadStatus,
   ResumableUploadStatus,
   continueResumableUpload,
-  RESUMABLE_UPLOAD_CHUNK_SIZE
+  RESUMABLE_UPLOAD_CHUNK_SIZE,
+  getBytes
 } from '../../src/implementation/requests';
 import { makeUrl } from '../../src/implementation/url';
 import { unknown, StorageErrorCode } from '../../src/implementation/error';
 import { RequestInfo } from '../../src/implementation/requestinfo';
-import { ConnectionPool } from '../../src/implementation/connectionPool';
 import { Metadata } from '../../src/metadata';
 import { FirebaseStorageImpl } from '../../src/service';
 import {
@@ -82,8 +82,7 @@ describe('Firebase Storage > Requests', () => {
   const storageService = new FirebaseStorageImpl(
     mockApp,
     fakeAuthProvider,
-    fakeAppCheckTokenProvider,
-    new ConnectionPool()
+    fakeAppCheckTokenProvider
   );
 
   const contentTypeInMetadata = 'application/jason';
@@ -180,12 +179,14 @@ describe('Firebase Storage > Requests', () => {
     }
   }
 
-  function checkMetadataHandler(requestInfo: RequestInfo<Metadata>): void {
+  function checkMetadataHandler(
+    requestInfo: RequestInfo<string, Metadata>
+  ): void {
     const metadata = requestInfo.handler(fakeXhrIo({}), serverResourceString);
     assert.deepEqual(metadata, metadataFromServerResource);
   }
 
-  function checkNoOpHandler<T>(requestInfo: RequestInfo<T>): void {
+  function checkNoOpHandler<T>(requestInfo: RequestInfo<string, T>): void {
     try {
       requestInfo.handler(fakeXhrIo({}), '');
     } catch (e) {
@@ -345,6 +346,14 @@ describe('Firebase Storage > Requests', () => {
     );
     const url = requestInfo.handler(fakeXhrIo({}), serverResourceString);
     assert.equal(url, downloadUrlFromServerResource);
+  });
+  it('getBytes handler', () => {
+    const requestInfo = getBytes(storageService, locationNormal);
+    const bytes = requestInfo.handler(
+      fakeXhrIo({}),
+      new Uint8Array([1, 128, 255])
+    ) as ArrayBuffer; // Narrow type to ArrayBuffer
+    assert.deepEqual(new Uint8Array(bytes), new Uint8Array([1, 128, 255]));
   });
   it('updateMetadata requestinfo', () => {
     const maps = [
@@ -622,6 +631,71 @@ describe('Firebase Storage > Requests', () => {
     );
 
     return assertBodyEquals(requestInfo.body, smallBlobString);
+  });
+  it('populates requestInfo with the upload command when more chunks are left', () => {
+    const url =
+      'https://this.is.totally.a.real.url.com/hello/upload?whatsgoingon';
+    const requestInfo = continueResumableUpload(
+      locationNormal,
+      storageService,
+      url,
+      bigBlob,
+      RESUMABLE_UPLOAD_CHUNK_SIZE,
+      mappings
+    );
+    assertObjectIncludes(
+      {
+        url,
+        method: 'POST',
+        urlParams: {},
+        headers: {
+          'X-Goog-Upload-Command': 'upload',
+          'X-Goog-Upload-Offset': '0'
+        }
+      },
+      requestInfo
+    );
+
+    assert.deepEqual(
+      requestInfo.body,
+      bigBlob.slice(0, RESUMABLE_UPLOAD_CHUNK_SIZE)!.uploadData()
+    );
+  });
+  it('populates requestInfo with just the finalize command when no more data needs to be uploaded', () => {
+    const url =
+      'https://this.is.totally.a.real.url.com/hello/upload?whatsgoingon';
+    const blobSize = bigBlob.size();
+    const requestInfo = continueResumableUpload(
+      locationNormal,
+      storageService,
+      url,
+      bigBlob,
+      RESUMABLE_UPLOAD_CHUNK_SIZE,
+      mappings,
+      {
+        current: blobSize,
+        total: blobSize,
+        finalized: false,
+        metadata: null
+      }
+    );
+    assertObjectIncludes(
+      {
+        url,
+        method: 'POST',
+        urlParams: {},
+        headers: {
+          'X-Goog-Upload-Command': 'finalize',
+          'X-Goog-Upload-Offset': blobSize.toString()
+        }
+      },
+      requestInfo
+    );
+
+    assert.deepEqual(
+      requestInfo.body,
+      bigBlob.slice(blobSize, blobSize)!.uploadData()
+    );
   });
   it('continueResumableUpload handler', () => {
     const url =

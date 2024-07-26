@@ -33,12 +33,13 @@ import {
 } from '@firebase/auth';
 import { FirebaseError } from '@firebase/util';
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import {
   cleanUpTestInstance,
   getTestInstance,
   randomEmail
 } from '../../helpers/integration/helpers';
+import { generateMiddlewareTests } from './middleware_test_generator';
 
 use(chaiAsPromised);
 
@@ -225,4 +226,11 @@ describe('Integration test: custom auth', () => {
       );
     });
   });
+
+  generateMiddlewareTests(
+    () => auth,
+    () => {
+      return signInWithCustomToken(auth, customToken);
+    }
+  );
 });

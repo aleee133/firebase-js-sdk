@@ -26,7 +26,7 @@ import {
 import '../../test/setup';
 import { _FirebaseInstallationsInternal } from '@firebase/installations';
 
-describe('Firebase Perofmrance > iid_service', () => {
+describe('Firebase Performance > iid_service', () => {
   const IID = 'fid';
   const AUTH_TOKEN = 'authToken';
 
@@ -34,10 +34,10 @@ describe('Firebase Perofmrance > iid_service', () => {
   before(() => {
     const getId = stub().resolves(IID);
     const getToken = stub().resolves(AUTH_TOKEN);
-    fakeInstallations = ({
+    fakeInstallations = {
       getId,
       getToken
-    } as unknown) as _FirebaseInstallationsInternal;
+    } as unknown as _FirebaseInstallationsInternal;
   });
 
   describe('getIidPromise', () => {

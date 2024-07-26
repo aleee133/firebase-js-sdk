@@ -23,31 +23,43 @@ import {
 import { Component, ComponentType } from '@firebase/component';
 
 import { name, version } from '../package.json';
-import { FirebaseCredentialsProvider } from '../src/api/credentials';
+import {
+  FirebaseAppCheckTokenProvider,
+  FirebaseAuthCredentialsProvider
+} from '../src/api/credentials';
 import { setSDKVersion } from '../src/core/version';
 
 import { Firestore } from './api/database';
-import { PrivateSettings } from './lite-api/settings';
+import { databaseIdFromApp } from './core/database_info';
 
-export function registerFirestore(variant?: string): void {
+export function registerFirestore(
+  variant?: string,
+  useFetchStreams = true
+): void {
   setSDKVersion(SDK_VERSION);
   _registerComponent(
     new Component(
       'firestore',
-      (container, { options: settings }: { options?: PrivateSettings }) => {
+      (container, { instanceIdentifier: databaseId, options: settings }) => {
         const app = container.getProvider('app').getImmediate()!;
         const firestoreInstance = new Firestore(
-          app,
-          new FirebaseCredentialsProvider(
+          new FirebaseAuthCredentialsProvider(
             container.getProvider('auth-internal')
-          )
+          ),
+          new FirebaseAppCheckTokenProvider(
+            container.getProvider('app-check-internal')
+          ),
+          databaseIdFromApp(app, databaseId),
+          app
         );
-        settings = { useFetchStreams: true, ...settings };
+        settings = { useFetchStreams, ...settings };
         firestoreInstance._setSettings(settings);
         return firestoreInstance;
       },
-      ComponentType.PUBLIC
-    )
+      'PUBLIC' as ComponentType.PUBLIC
+    ).setMultipleInstances(true)
   );
   registerVersion(name, version, variant);
+  // BUILD_TARGET will be replaced by values like esm5, esm2017, cjs5, etc during the compilation
+  registerVersion(name, version, '__BUILD_TARGET__');
 }

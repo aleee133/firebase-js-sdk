@@ -1,4 +1,3 @@
-import { FirebaseError } from '@firebase/util';
 /**
  * @license
  * Copyright 2017 Google LLC
@@ -15,6 +14,9 @@ import { FirebaseError } from '@firebase/util';
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+import { FirebaseError } from '@firebase/util';
+
 import { CONFIG_STORAGE_BUCKET_KEY } from './constants';
 
 /**
@@ -24,16 +26,17 @@ import { CONFIG_STORAGE_BUCKET_KEY } from './constants';
 export class StorageError extends FirebaseError {
   private readonly _baseMessage: string;
   /**
-   * Stores custom error data unque to StorageError.
+   * Stores custom error data unique to the `StorageError`.
    */
   customData: { serverResponse: string | null } = { serverResponse: null };
 
   /**
-   * @param code - A StorageErrorCode string to be prefixed with 'storage/' and
+   * @param code - A `StorageErrorCode` string to be prefixed with 'storage/' and
    *  added to the end of the message.
    * @param message  - Error message.
+   * @param status_ - Corresponding HTTP Status Code
    */
-  constructor(code: StorageErrorCode, message: string) {
+  constructor(code: StorageErrorCode, message: string, private status_ = 0) {
     super(
       prependCode(code),
       `Firebase Storage: ${message} (${prependCode(code)})`
@@ -44,8 +47,16 @@ export class StorageError extends FirebaseError {
     Object.setPrototypeOf(this, StorageError.prototype);
   }
 
+  get status(): number {
+    return this.status_;
+  }
+
+  set status(status: number) {
+    this.status_ = status;
+  }
+
   /**
-   * Compares a StorageErrorCode against this error's code, filtering out the prefix.
+   * Compares a `StorageErrorCode` against this error's code, filtering out the prefix.
    */
   _codeEquals(code: StorageErrorCode): boolean {
     return prependCode(code) === this.code;
@@ -72,9 +83,9 @@ export const errors = {};
 
 /**
  * @public
- * Error codes that can be attached to `StorageError`s.
+ * Error codes that can be attached to `StorageError` objects.
  */
-export const enum StorageErrorCode {
+export enum StorageErrorCode {
   // Shared between all platforms
   UNKNOWN = 'unknown',
   OBJECT_NOT_FOUND = 'object-not-found',
@@ -250,6 +261,13 @@ export function noDownloadURL(): StorageError {
   );
 }
 
+export function missingPolyFill(polyFill: string): StorageError {
+  return new StorageError(
+    StorageErrorCode.UNSUPPORTED_ENVIRONMENT,
+    `${polyFill} is missing. Make sure to install the required polyfills. See https://firebase.google.com/docs/web/environments-js-sdk#polyfills for more information.`
+  );
+}
+
 /**
  * @internal
  */
@@ -312,10 +330,7 @@ export function invalidRootOperation(name: string): StorageError {
  * @param format - The format that was not valid.
  * @param message - A message describing the format violation.
  */
-export function invalidFormat(
-  format: string,
-  message: string
-): StorageError {
+export function invalidFormat(format: string, message: string): StorageError {
   return new StorageError(
     StorageErrorCode.INVALID_FORMAT,
     "String does not match format '" + format + "': " + message
@@ -326,10 +341,7 @@ export function invalidFormat(
  * @param message - A message describing the internal error.
  */
 export function unsupportedEnvironment(message: string): StorageError {
-  throw new StorageError(
-    StorageErrorCode.UNSUPPORTED_ENVIRONMENT,
-    message
-  );
+  throw new StorageError(StorageErrorCode.UNSUPPORTED_ENVIRONMENT, message);
 }
 
 /**

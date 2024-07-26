@@ -16,6 +16,12 @@
  */
 
 import {
+  AppCheckInternalComponentName,
+  AppCheckTokenListener,
+  AppCheckTokenResult,
+  FirebaseAppCheckInternal
+} from '@firebase/app-check-interop-types';
+import {
   FirebaseAuthInternal,
   FirebaseAuthInternalName
 } from '@firebase/auth-interop-types';
@@ -31,18 +37,26 @@ import { Deferred } from '../util/promise';
 // TODO(mikelehen): This should be split into multiple files and probably
 // moved to an auth/ folder to match other platforms.
 
+/**
+ * @internal
+ */
+export type AuthTokenFactory = () => string;
+
+/**
+ * @internal
+ */
 export interface FirstPartyCredentialsSettings {
   // These are external types. Prevent minification.
-  ['type']: 'gapi';
-  ['client']: unknown;
+  ['type']: 'firstParty';
   ['sessionIndex']: string;
   ['iamToken']: string | null;
+  ['authTokenFactory']: AuthTokenFactory | null;
 }
 
 export interface ProviderCredentialsSettings {
   // These are external types. Prevent minification.
   ['type']: 'provider';
-  ['client']: CredentialsProvider;
+  ['client']: CredentialsProvider<User>;
 }
 
 /** Settings for private credentials */
@@ -50,7 +64,7 @@ export type CredentialsSettings =
   | FirstPartyCredentialsSettings
   | ProviderCredentialsSettings;
 
-export type TokenType = 'OAuth' | 'FirstParty';
+export type TokenType = 'OAuth' | 'FirstParty' | 'AppCheck';
 export interface Token {
   /** Type of token. */
   type: TokenType;
@@ -58,20 +72,20 @@ export interface Token {
   /**
    * The user with which the token is associated (used for persisting user
    * state on disk, etc.).
+   * This will be null for Tokens of the type 'AppCheck'.
    */
-  user: User;
+  user?: User;
 
-  /** Extra header values to be passed along with a request */
-  authHeaders: { [header: string]: string };
+  /** Header values to set for this token */
+  headers: Map<string, string>;
 }
 
 export class OAuthToken implements Token {
   type = 'OAuth' as TokenType;
-  authHeaders: { [header: string]: string };
+  headers = new Map();
+
   constructor(value: string, public user: User) {
-    this.authHeaders = {};
-    // Set the headers using Object Literal notation to avoid minification
-    this.authHeaders['Authorization'] = `Bearer ${value}`;
+    this.headers.set('Authorization', `Bearer ${value}`);
   }
 }
 
@@ -80,13 +94,13 @@ export class OAuthToken implements Token {
  * token and may need to invalidate other state if the current user has also
  * changed.
  */
-export type CredentialChangeListener = (user: User) => Promise<void>;
+export type CredentialChangeListener<T> = (credential: T) => Promise<void>;
 
 /**
  * Provides methods for getting the uid and token for the current user and
  * listening for changes.
  */
-export interface CredentialsProvider {
+export interface CredentialsProvider<T> {
   /**
    * Starts the credentials provider and specifies a listener to be notified of
    * credential changes (sign-in / sign-out, token changes). It is immediately
@@ -94,7 +108,10 @@ export interface CredentialsProvider {
    *
    * The change listener is invoked on the provided AsyncQueue.
    */
-  start(asyncQueue: AsyncQueue, changeListener: CredentialChangeListener): void;
+  start(
+    asyncQueue: AsyncQueue,
+    changeListener: CredentialChangeListener<T>
+  ): void;
 
   /** Requests a token for the current user. */
   getToken(): Promise<Token | null>;
@@ -112,7 +129,7 @@ export interface CredentialsProvider {
  * A CredentialsProvider that always yields an empty token.
  * @internal
  */
-export class EmptyCredentialsProvider implements CredentialsProvider {
+export class EmptyAuthCredentialsProvider implements CredentialsProvider<User> {
   getToken(): Promise<Token | null> {
     return Promise.resolve<Token | null>(null);
   }
@@ -121,7 +138,7 @@ export class EmptyCredentialsProvider implements CredentialsProvider {
 
   start(
     asyncQueue: AsyncQueue,
-    changeListener: CredentialChangeListener
+    changeListener: CredentialChangeListener<User>
   ): void {
     // Fire with initial user.
     asyncQueue.enqueueRetryable(() => changeListener(User.UNAUTHENTICATED));
@@ -134,7 +151,9 @@ export class EmptyCredentialsProvider implements CredentialsProvider {
  * A CredentialsProvider that always returns a constant token. Used for
  * emulator token mocking.
  */
-export class EmulatorCredentialsProvider implements CredentialsProvider {
+export class EmulatorAuthCredentialsProvider
+  implements CredentialsProvider<User>
+{
   constructor(private token: Token) {}
 
   /**
@@ -142,7 +161,7 @@ export class EmulatorCredentialsProvider implements CredentialsProvider {
    * This isn't actually necessary since the UID never changes, but we use this
    * to verify the listen contract is adhered to in tests.
    */
-  private changeListener: CredentialChangeListener | null = null;
+  private changeListener: CredentialChangeListener<User> | null = null;
 
   getToken(): Promise<Token | null> {
     return Promise.resolve(this.token);
@@ -152,7 +171,7 @@ export class EmulatorCredentialsProvider implements CredentialsProvider {
 
   start(
     asyncQueue: AsyncQueue,
-    changeListener: CredentialChangeListener
+    changeListener: CredentialChangeListener<User>
   ): void {
     debugAssert(
       !this.changeListener,
@@ -160,7 +179,7 @@ export class EmulatorCredentialsProvider implements CredentialsProvider {
     );
     this.changeListener = changeListener;
     // Fire with initial user.
-    asyncQueue.enqueueRetryable(() => changeListener(this.token.user));
+    asyncQueue.enqueueRetryable(() => changeListener(this.token.user!));
   }
 
   shutdown(): void {
@@ -169,7 +188,7 @@ export class EmulatorCredentialsProvider implements CredentialsProvider {
 }
 
 /** Credential provider for the Lite SDK. */
-export class LiteCredentialsProvider implements CredentialsProvider {
+export class LiteAuthCredentialsProvider implements CredentialsProvider<User> {
   private auth: FirebaseAuthInternal | null = null;
 
   constructor(authProvider: Provider<FirebaseAuthInternalName>) {
@@ -203,13 +222,15 @@ export class LiteCredentialsProvider implements CredentialsProvider {
 
   start(
     asyncQueue: AsyncQueue,
-    changeListener: CredentialChangeListener
+    changeListener: CredentialChangeListener<User>
   ): void {}
 
   shutdown(): void {}
 }
 
-export class FirebaseCredentialsProvider implements CredentialsProvider {
+export class FirebaseAuthCredentialsProvider
+  implements CredentialsProvider<User>
+{
   /**
    * The auth token listener registered with FirebaseApp, retained here so we
    * can unregister it.
@@ -233,7 +254,7 @@ export class FirebaseCredentialsProvider implements CredentialsProvider {
 
   start(
     asyncQueue: AsyncQueue,
-    changeListener: CredentialChangeListener
+    changeListener: CredentialChangeListener<User>
   ): void {
     let lastTokenId = this.tokenCounter;
 
@@ -270,7 +291,7 @@ export class FirebaseCredentialsProvider implements CredentialsProvider {
     };
 
     const registerAuth = (auth: FirebaseAuthInternal): void => {
-      logDebug('FirebaseCredentialsProvider', 'Auth detected');
+      logDebug('FirebaseAuthCredentialsProvider', 'Auth detected');
       this.auth = auth;
       this.auth.addAuthTokenListener(this.tokenListener);
       awaitNextToken();
@@ -288,7 +309,7 @@ export class FirebaseCredentialsProvider implements CredentialsProvider {
           registerAuth(auth);
         } else {
           // If auth is still not available, proceed with `null` user
-          logDebug('FirebaseCredentialsProvider', 'Auth not yet detected');
+          logDebug('FirebaseAuthCredentialsProvider', 'Auth not yet detected');
           nextToken.resolve();
           nextToken = new Deferred<void>();
         }
@@ -301,7 +322,7 @@ export class FirebaseCredentialsProvider implements CredentialsProvider {
   getToken(): Promise<Token | null> {
     debugAssert(
       this.tokenListener != null,
-      'FirebaseCredentialsProvider not started.'
+      'FirebaseAuthCredentialsProvider not started.'
     );
 
     // Take note of the current value of the tokenCounter so that this method
@@ -321,7 +342,7 @@ export class FirebaseCredentialsProvider implements CredentialsProvider {
       // user, we can't be sure).
       if (this.tokenCounter !== initialTokenCounter) {
         logDebug(
-          'FirebaseCredentialsProvider',
+          'FirebaseAuthCredentialsProvider',
           'getToken aborted due to token change.'
         );
         return this.getToken();
@@ -363,15 +384,6 @@ export class FirebaseCredentialsProvider implements CredentialsProvider {
   }
 }
 
-// Manual type definition for the subset of Gapi we use.
-interface Gapi {
-  auth: {
-    getAuthHeaderValueForFirstParty: (
-      userIdentifiers: Array<{ [key: string]: string }>
-    ) => string | null;
-  };
-}
-
 /*
  * FirstPartyToken provides a fresh token each time its value
  * is requested, because if the token is too old, requests will be rejected.
@@ -382,26 +394,38 @@ interface Gapi {
 export class FirstPartyToken implements Token {
   type = 'FirstParty' as TokenType;
   user = User.FIRST_PARTY;
+  private _headers = new Map();
 
   constructor(
-    private gapi: Gapi,
-    private sessionIndex: string,
-    private iamToken: string | null
+    private readonly sessionIndex: string,
+    private readonly iamToken: string | null,
+    private readonly authTokenFactory: AuthTokenFactory | null
   ) {}
 
-  get authHeaders(): { [header: string]: string } {
-    const headers: { [header: string]: string } = {
-      'X-Goog-AuthUser': this.sessionIndex
-    };
+  /**
+   * Gets an authorization token, using a provided factory function, or return
+   * null.
+   */
+  private getAuthToken(): string | null {
+    if (this.authTokenFactory) {
+      return this.authTokenFactory();
+    } else {
+      return null;
+    }
+  }
+
+  get headers(): Map<string, string> {
+    this._headers.set('X-Goog-AuthUser', this.sessionIndex);
     // Use array notation to prevent minification
-    const authHeader = this.gapi['auth']['getAuthHeaderValueForFirstParty']([]);
-    if (authHeader) {
-      headers['Authorization'] = authHeader;
+    const authHeaderTokenValue = this.getAuthToken();
+    if (authHeaderTokenValue) {
+      this._headers.set('Authorization', authHeaderTokenValue);
     }
     if (this.iamToken) {
-      headers['X-Goog-Iam-Authorization-Token'] = this.iamToken;
+      this._headers.set('X-Goog-Iam-Authorization-Token', this.iamToken);
     }
-    return headers;
+
+    return this._headers;
   }
 }
 
@@ -410,22 +434,28 @@ export class FirstPartyToken implements Token {
  * to authenticate the user, using technique that is only available
  * to applications hosted by Google.
  */
-export class FirstPartyCredentialsProvider implements CredentialsProvider {
+export class FirstPartyAuthCredentialsProvider
+  implements CredentialsProvider<User>
+{
   constructor(
-    private gapi: Gapi,
     private sessionIndex: string,
-    private iamToken: string | null
+    private iamToken: string | null,
+    private authTokenFactory: AuthTokenFactory | null
   ) {}
 
   getToken(): Promise<Token | null> {
     return Promise.resolve(
-      new FirstPartyToken(this.gapi, this.sessionIndex, this.iamToken)
+      new FirstPartyToken(
+        this.sessionIndex,
+        this.iamToken,
+        this.authTokenFactory
+      )
     );
   }
 
   start(
     asyncQueue: AsyncQueue,
-    changeListener: CredentialChangeListener
+    changeListener: CredentialChangeListener<User>
   ): void {
     // Fire with initial uid.
     asyncQueue.enqueueRetryable(() => changeListener(User.FIRST_PARTY));
@@ -436,34 +466,200 @@ export class FirstPartyCredentialsProvider implements CredentialsProvider {
   invalidateToken(): void {}
 }
 
+export class AppCheckToken implements Token {
+  type = 'AppCheck' as TokenType;
+  headers = new Map();
+
+  constructor(private value: string) {
+    if (value && value.length > 0) {
+      this.headers.set('x-firebase-appcheck', this.value);
+    }
+  }
+}
+
+export class FirebaseAppCheckTokenProvider
+  implements CredentialsProvider<string>
+{
+  /**
+   * The AppCheck token listener registered with FirebaseApp, retained here so
+   * we can unregister it.
+   */
+  private tokenListener!: AppCheckTokenListener;
+  private forceRefresh = false;
+  private appCheck: FirebaseAppCheckInternal | null = null;
+  private latestAppCheckToken: string | null = null;
+
+  constructor(
+    private appCheckProvider: Provider<AppCheckInternalComponentName>
+  ) {}
+
+  start(
+    asyncQueue: AsyncQueue,
+    changeListener: CredentialChangeListener<string>
+  ): void {
+    const onTokenChanged: (
+      tokenResult: AppCheckTokenResult
+    ) => Promise<void> = tokenResult => {
+      if (tokenResult.error != null) {
+        logDebug(
+          'FirebaseAppCheckTokenProvider',
+          `Error getting App Check token; using placeholder token instead. Error: ${tokenResult.error.message}`
+        );
+      }
+      const tokenUpdated = tokenResult.token !== this.latestAppCheckToken;
+      this.latestAppCheckToken = tokenResult.token;
+      logDebug(
+        'FirebaseAppCheckTokenProvider',
+        `Received ${tokenUpdated ? 'new' : 'existing'} token.`
+      );
+      return tokenUpdated
+        ? changeListener(tokenResult.token)
+        : Promise.resolve();
+    };
+
+    this.tokenListener = (tokenResult: AppCheckTokenResult) => {
+      asyncQueue.enqueueRetryable(() => onTokenChanged(tokenResult));
+    };
+
+    const registerAppCheck = (appCheck: FirebaseAppCheckInternal): void => {
+      logDebug('FirebaseAppCheckTokenProvider', 'AppCheck detected');
+      this.appCheck = appCheck;
+      this.appCheck.addTokenListener(this.tokenListener);
+    };
+
+    this.appCheckProvider.onInit(appCheck => registerAppCheck(appCheck));
+
+    // Our users can initialize AppCheck after Firestore, so we give it
+    // a chance to register itself with the component framework.
+    setTimeout(() => {
+      if (!this.appCheck) {
+        const appCheck = this.appCheckProvider.getImmediate({ optional: true });
+        if (appCheck) {
+          registerAppCheck(appCheck);
+        } else {
+          // If AppCheck is still not available, proceed without it.
+          logDebug(
+            'FirebaseAppCheckTokenProvider',
+            'AppCheck not yet detected'
+          );
+        }
+      }
+    }, 0);
+  }
+
+  getToken(): Promise<Token | null> {
+    debugAssert(
+      this.tokenListener != null,
+      'FirebaseAppCheckTokenProvider not started.'
+    );
+
+    const forceRefresh = this.forceRefresh;
+    this.forceRefresh = false;
+
+    if (!this.appCheck) {
+      return Promise.resolve(null);
+    }
+
+    return this.appCheck.getToken(forceRefresh).then(tokenResult => {
+      if (tokenResult) {
+        hardAssert(
+          typeof tokenResult.token === 'string',
+          'Invalid tokenResult returned from getToken():' + tokenResult
+        );
+        this.latestAppCheckToken = tokenResult.token;
+        return new AppCheckToken(tokenResult.token);
+      } else {
+        return null;
+      }
+    });
+  }
+
+  invalidateToken(): void {
+    this.forceRefresh = true;
+  }
+
+  shutdown(): void {
+    if (this.appCheck) {
+      this.appCheck.removeTokenListener(this.tokenListener!);
+    }
+  }
+}
+
+/**
+ * An AppCheck token provider that always yields an empty token.
+ * @internal
+ */
+export class EmptyAppCheckTokenProvider implements CredentialsProvider<string> {
+  getToken(): Promise<Token | null> {
+    return Promise.resolve<Token | null>(new AppCheckToken(''));
+  }
+
+  invalidateToken(): void {}
+
+  start(
+    asyncQueue: AsyncQueue,
+    changeListener: CredentialChangeListener<string>
+  ): void {}
+
+  shutdown(): void {}
+}
+
+/** AppCheck token provider for the Lite SDK. */
+export class LiteAppCheckTokenProvider implements CredentialsProvider<string> {
+  private appCheck: FirebaseAppCheckInternal | null = null;
+
+  constructor(
+    private appCheckProvider: Provider<AppCheckInternalComponentName>
+  ) {
+    appCheckProvider.onInit(appCheck => {
+      this.appCheck = appCheck;
+    });
+  }
+
+  getToken(): Promise<Token | null> {
+    if (!this.appCheck) {
+      return Promise.resolve(null);
+    }
+
+    return this.appCheck.getToken().then(tokenResult => {
+      if (tokenResult) {
+        hardAssert(
+          typeof tokenResult.token === 'string',
+          'Invalid tokenResult returned from getToken():' + tokenResult
+        );
+        return new AppCheckToken(tokenResult.token);
+      } else {
+        return null;
+      }
+    });
+  }
+
+  invalidateToken(): void {}
+
+  start(
+    asyncQueue: AsyncQueue,
+    changeListener: CredentialChangeListener<string>
+  ): void {}
+
+  shutdown(): void {}
+}
+
 /**
  * Builds a CredentialsProvider depending on the type of
  * the credentials passed in.
  */
-export function makeCredentialsProvider(
+export function makeAuthCredentialsProvider(
   credentials?: CredentialsSettings
-): CredentialsProvider {
+): CredentialsProvider<User> {
   if (!credentials) {
-    return new EmptyCredentialsProvider();
+    return new EmptyAuthCredentialsProvider();
   }
-
   switch (credentials['type']) {
-    case 'gapi':
-      const client = credentials['client'] as Gapi;
-      // Make sure this really is a Gapi client.
-      hardAssert(
-        !!(
-          typeof client === 'object' &&
-          client !== null &&
-          client['auth'] &&
-          client['auth']['getAuthHeaderValueForFirstParty']
-        ),
-        'unexpected gapi interface'
-      );
-      return new FirstPartyCredentialsProvider(
-        client,
+    case 'firstParty':
+      return new FirstPartyAuthCredentialsProvider(
         credentials['sessionIndex'] || '0',
-        credentials['iamToken'] || null
+        credentials['iamToken'] || null,
+        credentials['authTokenFactory'] || null
       );
 
     case 'provider':
@@ -472,7 +668,7 @@ export function makeCredentialsProvider(
     default:
       throw new FirestoreError(
         Code.INVALID_ARGUMENT,
-        'makeCredentialsProvider failed due to invalid credential type'
+        'makeAuthCredentialsProvider failed due to invalid credential type'
       );
   }
 }

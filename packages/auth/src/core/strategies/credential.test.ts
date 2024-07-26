@@ -16,14 +16,10 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import { stub } from 'sinon';
 
-import {
-  OperationType,
-  ProviderId,
-  SignInMethod
-} from '../../model/enums';
+import { OperationType, ProviderId, SignInMethod } from '../../model/enums';
 import { FirebaseError } from '@firebase/util';
 
 import { mockEndpoint } from '../../../test/helpers/api/helper';
@@ -139,16 +135,15 @@ describe('core/strategies/credential', () => {
       stub(authCredential, '_getIdTokenResponse').returns(
         Promise.reject(
           _createError(auth, AuthErrorCode.MFA_REQUIRED, {
-            serverResponse
+            _serverResponse: serverResponse
           })
         )
       );
       const error = await expect(
         signInWithCredential(auth, authCredential)
       ).to.be.rejectedWith(MultiFactorError);
-      expect(error.operationType).to.eq(OperationType.SIGN_IN);
-      expect(error.serverResponse).to.eql(serverResponse);
-      expect(error.user).to.be.undefined;
+      expect(error.customData.operationType).to.eq(OperationType.SIGN_IN);
+      expect(error.customData._serverResponse).to.eql(serverResponse);
     });
   });
 

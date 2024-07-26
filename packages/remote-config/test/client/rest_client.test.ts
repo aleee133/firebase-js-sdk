@@ -55,7 +55,7 @@ describe('RestClient', () => {
 
   describe('fetch', () => {
     let fetchStub: sinon.SinonStub<
-      [RequestInfo, RequestInit?],
+      [RequestInfo | URL, RequestInit?],
       Promise<Response>
     >;
 
@@ -114,14 +114,13 @@ describe('RestClient', () => {
       expect(fetchStub).to.be.calledWith(
         sinon.match.string,
         sinon.match({
-          body:
-            '{"sdk_version":"sdk-version","app_instance_id":"fis-id","app_instance_id_token":"fis-token","app_id":"app-id","language_code":"en-US"}'
+          body: '{"sdk_version":"sdk-version","app_instance_id":"fis-id","app_instance_id_token":"fis-token","app_id":"app-id","language_code":"en-US"}'
         })
       );
     });
 
     it('throws on network failure', async () => {
-      // The Fetch API throws a TypeError on network falure:
+      // The Fetch API throws a TypeError on network failure:
       // https://developer.mozilla.org/en-US/docs/Web/API/WindowOrWorkerGlobalScope/fetch#Exceptions
       const originalError = new TypeError('Network request failed');
       fetchStub.returns(Promise.reject(originalError));
@@ -129,7 +128,7 @@ describe('RestClient', () => {
       const fetchPromise = client.fetch(DEFAULT_REQUEST);
 
       const firebaseError = ERROR_FACTORY.create(ErrorCode.FETCH_NETWORK, {
-        originalErrorMessage: originalError.message
+        originalErrorMessage: (originalError as Error)?.message
       });
 
       await expect(fetchPromise)

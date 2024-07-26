@@ -70,11 +70,11 @@ describe('Performance Monitoring > perf_logger', () => {
   }
 
   setupApi(self);
-  const fakeFirebaseApp = ({
+  const fakeFirebaseApp = {
     options: { appId: APP_ID }
-  } as unknown) as FirebaseApp;
+  } as unknown as FirebaseApp;
 
-  const fakeInstallations = ({} as unknown) as FirebaseInstallations;
+  const fakeInstallations = {} as unknown as FirebaseInstallations;
   const performanceController = new PerformanceController(
     fakeFirebaseApp,
     fakeInstallations
@@ -307,6 +307,7 @@ describe('Performance Monitoring > perf_logger', () => {
         responseEnd: 5685.300000011921,
         responseStart: 0,
         secureConnectionStart: 0,
+        serverTiming: [],
         startTime: 5645.689999917522,
         transferSize: 0,
         workerStart: 0,
@@ -369,6 +370,7 @@ describe('Performance Monitoring > perf_logger', () => {
         responseEnd: 5685.300000011921,
         responseStart: 0,
         secureConnectionStart: 0,
+        serverTiming: [],
         startTime: 5645.689999917522,
         transferSize: 0,
         workerStart: 0,
@@ -413,6 +415,7 @@ describe('Performance Monitoring > perf_logger', () => {
         responseEnd: 5685.300000011921,
         responseStart: 0,
         secureConnectionStart: 0,
+        serverTiming: [],
         startTime: 5645.689999917522,
         transferSize: 0,
         workerStart: 0,

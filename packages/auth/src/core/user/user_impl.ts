@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-import { IdTokenResult } from '../../model/public_types';
+import { IdTokenResult, UserInfo } from '../../model/public_types';
 import { NextFn } from '@firebase/util';
-
 import {
   APIUserInfo,
+  GetAccountInfoResponse,
   deleteAccount
 } from '../../api/account_management/account';
 import { FinalizeMfaResponse } from '../../api/authentication/mfa';
@@ -32,14 +32,18 @@ import {
 } from '../../model/user';
 import { AuthErrorCode } from '../errors';
 import { PersistedBlob } from '../persistence';
-import { _assert } from '../util/assert';
+import {
+  _assert,
+  _serverAppCurrentUserOperationNotSupportedError
+} from '../util/assert';
 import { getIdTokenResult } from './id_token_result';
 import { _logoutIfInvalidated } from './invalidation';
 import { ProactiveRefresh } from './proactive_refresh';
-import { _reloadWithoutSaving, reload } from './reload';
+import { extractProviderData, _reloadWithoutSaving, reload } from './reload';
 import { StsTokenManager } from './token_manager';
 import { UserMetadata } from './user_metadata';
 import { ProviderId } from '../../model/enums';
+import { _isFirebaseServerApp } from '@firebase/app';
 
 function assertStringOrUndefined(
   assertion: unknown,
@@ -61,11 +65,11 @@ export class UserImpl implements UserInternal {
 
   uid: string;
   auth: AuthInternal;
-  emailVerified = false;
-  isAnonymous = false;
-  tenantId: string | null = null;
+  emailVerified: boolean;
+  isAnonymous: boolean;
+  tenantId: string | null;
   readonly metadata: UserMetadata;
-  providerData: MutableUserInfo[] = [];
+  providerData: MutableUserInfo[];
 
   // Optional fields from UserInfo
   displayName: string | null;
@@ -87,6 +91,8 @@ export class UserImpl implements UserInternal {
     this.phoneNumber = opt.phoneNumber || null;
     this.photoURL = opt.photoURL || null;
     this.isAnonymous = opt.isAnonymous || false;
+    this.tenantId = opt.tenantId || null;
+    this.providerData = opt.providerData ? [...opt.providerData] : [];
     this.metadata = new UserMetadata(
       opt.createdAt || undefined,
       opt.lastLoginAt || undefined
@@ -138,11 +144,13 @@ export class UserImpl implements UserInternal {
   }
 
   _clone(auth: AuthInternal): UserInternal {
-    return new UserImpl({
+    const newUser = new UserImpl({
       ...this,
       auth,
       stsTokenManager: this.stsTokenManager._clone()
     });
+    newUser.metadata._copy(this.metadata);
+    return newUser;
   }
 
   _onReload(callback: NextFn<APIUserInfo>): void {
@@ -196,6 +204,11 @@ export class UserImpl implements UserInternal {
   }
 
   async delete(): Promise<void> {
+    if (_isFirebaseServerApp(this.auth.app)) {
+      return Promise.reject(
+        _serverAppCurrentUserOperationNotSupportedError(this.auth)
+      );
+    }
     const idToken = await this.getIdToken();
     await _logoutIfInvalidated(this, deleteAccount(this.auth, { idToken }));
     this.stsTokenManager.clearRefreshToken();
@@ -327,6 +340,61 @@ export class UserImpl implements UserInternal {
 
     // Updates the user info and data and resolves with a user instance.
     await _reloadWithoutSaving(user);
+    return user;
+  }
+
+  /**
+   * Initialize a User from an idToken server response
+   * @param auth
+   * @param idTokenResponse
+   */
+  static async _fromGetAccountInfoResponse(
+    auth: AuthInternal,
+    response: GetAccountInfoResponse,
+    idToken: string
+  ): Promise<UserInternal> {
+    const coreAccount = response.users[0];
+    _assert(coreAccount.localId !== undefined, AuthErrorCode.INTERNAL_ERROR);
+
+    const providerData: UserInfo[] =
+      coreAccount.providerUserInfo !== undefined
+        ? extractProviderData(coreAccount.providerUserInfo)
+        : [];
+
+    const isAnonymous =
+      !(coreAccount.email && coreAccount.passwordHash) && !providerData?.length;
+
+    const stsTokenManager = new StsTokenManager();
+    stsTokenManager.updateFromIdToken(idToken);
+
+    // Initialize the Firebase Auth user.
+    const user = new UserImpl({
+      uid: coreAccount.localId,
+      auth,
+      stsTokenManager,
+      isAnonymous
+    });
+
+    // update the user with data from the GetAccountInfo response.
+    const updates: Partial<UserInternal> = {
+      uid: coreAccount.localId,
+      displayName: coreAccount.displayName || null,
+      photoURL: coreAccount.photoUrl || null,
+      email: coreAccount.email || null,
+      emailVerified: coreAccount.emailVerified || false,
+      phoneNumber: coreAccount.phoneNumber || null,
+      tenantId: coreAccount.tenantId || null,
+      providerData,
+      metadata: new UserMetadata(
+        coreAccount.createdAt,
+        coreAccount.lastLoginAt
+      ),
+      isAnonymous:
+        !(coreAccount.email && coreAccount.passwordHash) &&
+        !providerData?.length
+    };
+
+    Object.assign(user, updates);
     return user;
   }
 }

@@ -16,9 +16,9 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 import {
   _EventType,
   _MessageError,
@@ -45,7 +45,7 @@ describe('platform_browser/messagechannel/sender', () => {
     let pendingTimeouts: TimerMap;
 
     beforeEach(() => {
-      serviceWorker = (new FakeServiceWorker() as unknown) as ServiceWorker;
+      serviceWorker = new FakeServiceWorker() as unknown as ServiceWorker;
       sender = new Sender(serviceWorker);
       pendingTimeouts = stubTimeouts();
       sinon.stub(window, 'clearTimeout');

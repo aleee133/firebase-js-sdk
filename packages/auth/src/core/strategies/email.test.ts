@@ -16,9 +16,9 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import { restore, SinonStub, stub } from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 
 import { ActionCodeOperation } from '../../model/public_types';
 import { ProviderId } from '../../model/enums';
@@ -171,7 +171,7 @@ describe('core/strategies/sendEmailVerification', () => {
         continueUrl: 'my-url',
         dynamicLinkDomain: 'fdl-domain',
         canHandleCodeInApp: true,
-        iosBundleId: 'my-bundle'
+        iOSBundleId: 'my-bundle'
       });
     });
   });
@@ -280,7 +280,7 @@ describe('core/strategies/verifyBeforeUpdateEmail', () => {
         continueUrl: 'my-url',
         dynamicLinkDomain: 'fdl-domain',
         canHandleCodeInApp: true,
-        iosBundleId: 'my-bundle'
+        iOSBundleId: 'my-bundle'
       });
     });
   });

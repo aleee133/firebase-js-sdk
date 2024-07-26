@@ -22,7 +22,7 @@ import { bundleWithRollup } from './bundle/rollup';
 import { bundleWithWebpack } from './bundle/webpack';
 import { calculateContentSize } from './util';
 import { minify } from './bundle/minify';
-import { extractDeclarations, MemberList } from './analysis-helper';
+import { extractAllTopLevelSymbols, MemberList } from './analysis-helper';
 
 interface BundleAnalysisArgs {
   input: string;
@@ -64,13 +64,13 @@ interface SubModuleImport {
   imports: string[];
 }
 
-enum Bundler {
+export enum Bundler {
   Rollup = 'rollup',
   Webpack = 'webpack',
   Both = 'both'
 }
 
-enum Mode {
+export enum Mode {
   Npm = 'npm',
   Local = 'local'
 }
@@ -102,7 +102,7 @@ export async function run({
 function loadBundleDefinitions(path: string): BundleDefinition[] {
   if (!existsSync(path)) {
     throw new Error(
-      `${path} doesn't exist. Please provide a valid path to the bundle defintion file.`
+      `${path} doesn't exist. Please provide a valid path to the bundle definition file.`
     );
   }
 
@@ -392,7 +392,7 @@ async function analyzeBundleWithBundler(
     analysisResult.debugInfo = {
       pathToBundle: bundleFilePath,
       pathToMinifiedBundle: minifiedBundleFilePath,
-      dependencies: extractDeclarations(bundleFilePath)
+      dependencies: extractAllTopLevelSymbols(bundleFilePath)
     };
   }
 

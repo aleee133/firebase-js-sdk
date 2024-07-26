@@ -20,11 +20,12 @@ import { FirebaseApp, _FirebaseService } from '@firebase/app';
 import { FirebaseAppCheckInternal, ListenerType } from './types';
 import {
   getToken,
+  getLimitedUseToken,
   addTokenListener,
   removeTokenListener
 } from './internal-api';
 import { Provider } from '@firebase/component';
-import { getState } from './state';
+import { getStateReference } from './state';
 
 /**
  * AppCheck Service class.
@@ -32,10 +33,10 @@ import { getState } from './state';
 export class AppCheckService implements AppCheck, _FirebaseService {
   constructor(
     public app: FirebaseApp,
-    public platformLoggerProvider: Provider<'platform-logger'>
+    public heartbeatServiceProvider: Provider<'heartbeat'>
   ) {}
   _delete(): Promise<void> {
-    const { tokenObservers } = getState(this.app);
+    const { tokenObservers } = getStateReference(this.app);
     for (const tokenObserver of tokenObservers) {
       removeTokenListener(this.app, tokenObserver.next);
     }
@@ -45,9 +46,9 @@ export class AppCheckService implements AppCheck, _FirebaseService {
 
 export function factory(
   app: FirebaseApp,
-  platformLoggerProvider: Provider<'platform-logger'>
+  heartbeatServiceProvider: Provider<'heartbeat'>
 ): AppCheckService {
-  return new AppCheckService(app, platformLoggerProvider);
+  return new AppCheckService(app, heartbeatServiceProvider);
 }
 
 export function internalFactory(
@@ -55,6 +56,7 @@ export function internalFactory(
 ): FirebaseAppCheckInternal {
   return {
     getToken: forceRefresh => getToken(appCheck, forceRefresh),
+    getLimitedUseToken: () => getLimitedUseToken(appCheck),
     addTokenListener: listener =>
       addTokenListener(appCheck, ListenerType.INTERNAL, listener),
     removeTokenListener: listener => removeTokenListener(appCheck.app, listener)

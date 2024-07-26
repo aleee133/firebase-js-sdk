@@ -19,6 +19,8 @@
 import { FirebaseApp } from '@firebase/app-types';
 import { FirebaseService } from '@firebase/app-types/private';
 import {
+  forceLongPolling,
+  forceWebSockets,
   goOnline,
   connectDatabaseEmulator,
   goOffline,
@@ -33,7 +35,6 @@ import {
   Compat,
   EmulatorMockTokenOptions
 } from '@firebase/util';
-
 
 import { Reference } from './Reference';
 
@@ -52,7 +53,9 @@ export class Database implements FirebaseService, Compat<ModularDatabase> {
   constructor(readonly _delegate: ModularDatabase, readonly app: FirebaseApp) {}
 
   INTERNAL = {
-    delete: () => this._delegate._delete()
+    delete: () => this._delegate._delete(),
+    forceWebSockets,
+    forceLongPolling
   };
 
   /**

@@ -16,8 +16,8 @@
  */
 
 /**
- * Should not define `ignorePacakges` and `onlyIncludePackages` at same time,
- * `ignorePacakges` will be ignored if you do so
+ * Should not define `ignorePackages` and `onlyIncludePackages` at same time,
+ * `ignorePackages` will be ignored if you do so
  */
 export interface TestConfig {
   // Ignore the packages in test even if they changed
@@ -34,13 +34,15 @@ export const testConfig: {
   'core': {
     'ignorePackages': [
       '@firebase/firestore',
+      '@firebase/firestore-compat',
       'firebase-firestore-integration-test',
       'firebase-messaging-integration-test',
       'firebase-namespace-integration-test',
       'firebase-compat-typings-test',
       '@firebase/rules-unit-testing',
       '@firebase/auth',
-      'firebase',
+      '@firebase/auth-compat',
+      'firebase'
     ]
   },
   'firestore': {
@@ -59,6 +61,6 @@ export const testConfig: {
     'alwaysIncludePackages': ['firebase-namespace-integration-test']
   },
   'auth': {
-    'onlyIncludePackages': ['@firebase/auth']
+    'onlyIncludePackages': ['@firebase/auth', '@firebase/auth-compat']
   }
 };

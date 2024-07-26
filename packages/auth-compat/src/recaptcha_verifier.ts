@@ -23,7 +23,8 @@ import { Compat } from '@firebase/util';
 const _assert: typeof exp._assert = exp._assert;
 
 export class RecaptchaVerifier
-  implements compat.RecaptchaVerifier, Compat<exp.ApplicationVerifier> {
+  implements compat.RecaptchaVerifier, Compat<exp.ApplicationVerifier>
+{
   readonly _delegate: exp.RecaptchaVerifier;
   type: string;
   constructor(
@@ -36,13 +37,12 @@ export class RecaptchaVerifier
       appName: app.name
     });
     this._delegate = new exp.RecaptchaVerifier(
-      container,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      parameters as any,
-
       // TODO: remove ts-ignore when moving types from auth-types to auth-compat
       // @ts-ignore
-      app.auth!()
+      app.auth!(),
+      container,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      parameters as any
     );
     this.type = this._delegate.type;
   }

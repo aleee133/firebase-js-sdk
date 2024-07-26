@@ -48,8 +48,7 @@ export function generateToc({
   if (jsSdk) {
     const firebaseToc: ITocItem = {
       title: 'firebase',
-      path: `${g3Path}/index`,
-      section: []
+      path: `${g3Path}/index`
     };
     toc.push(firebaseToc);
   }
@@ -76,13 +75,28 @@ function generateTocRecursively(
   // generate toc item only for entry points
   if (apiItem.kind === ApiItemKind.EntryPoint) {
     // Entry point
-    const entryPointName = (apiItem.canonicalReference
-      .source! as ModuleSource).escapedPath.replace('@firebase/', '');
+    const entryPointName = (
+      apiItem.canonicalReference.source! as ModuleSource
+    ).escapedPath.replace('@firebase/', '');
     const entryPointToc: ITocItem = {
       title: entryPointName,
       path: `${g3Path}/${getFilenameForApiItem(apiItem, addFileNameSuffix)}`,
       section: []
     };
+
+    for (const member of apiItem.members) {
+      // only classes and interfaces have dedicated pages
+      if (
+        member.kind === ApiItemKind.Class ||
+        member.kind === ApiItemKind.Interface
+      ) {
+        const fileName = getFilenameForApiItem(member, addFileNameSuffix);
+        entryPointToc.section!.push({
+          title: member.displayName,
+          path: `${g3Path}/${fileName}`
+        });
+      }
+    }
 
     toc.push(entryPointToc);
   } else {

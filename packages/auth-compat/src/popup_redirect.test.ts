@@ -16,12 +16,16 @@
  */
 
 import { expect, use } from 'chai';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 import * as sinon from 'sinon';
 import * as exp from '@firebase/auth/internal';
 import * as platform from './platform';
 import { CompatPopupRedirectResolver } from './popup_redirect';
 import { FirebaseApp } from '@firebase/app-compat';
+import {
+  FAKE_APP_CHECK_CONTROLLER_PROVIDER,
+  FAKE_HEARTBEAT_CONTROLLER_PROVIDER
+} from '../test/helpers/helpers';
 
 use(sinonChai);
 
@@ -41,9 +45,14 @@ describe('popup_redirect/CompatPopupRedirectResolver', () => {
   beforeEach(() => {
     compatResolver = new CompatPopupRedirectResolver();
     const app = { options: { apiKey: 'api-key' } } as FirebaseApp;
-    auth = new exp.AuthImpl(app, {
-      apiKey: 'api-key'
-    } as exp.ConfigInternal);
+    auth = new exp.AuthImpl(
+      app,
+      FAKE_HEARTBEAT_CONTROLLER_PROVIDER,
+      FAKE_APP_CHECK_CONTROLLER_PROVIDER,
+      {
+        apiKey: 'api-key'
+      } as exp.ConfigInternal
+    );
   });
 
   afterEach(() => {
@@ -174,6 +183,7 @@ describe('popup_redirect/CompatPopupRedirectResolver', () => {
 
 class FakeResolver implements exp.PopupRedirectResolverInternal {
   _completeRedirectFn = async (): Promise<null> => null;
+  _overrideRedirectResult = (): void => {};
   _redirectPersistence = exp.inMemoryPersistence;
   _shouldInitProactively = true;
 

@@ -15,17 +15,22 @@
  * limitations under the License.
  */
 
-import { isCollectionGroupQuery, Query, queryMatches } from '../core/query';
+import { Query, queryMatches } from '../core/query';
 import { SnapshotVersion } from '../core/snapshot_version';
 import {
   DocumentKeySet,
-  DocumentSizeEntry,
   MutableDocumentMap,
-  mutableDocumentMap
+  mutableDocumentMap,
+  OverlayMap
 } from '../model/collections';
 import { Document, MutableDocument } from '../model/document';
 import { DocumentKey } from '../model/document_key';
-import { debugAssert } from '../util/assert';
+import {
+  IndexOffset,
+  indexOffsetComparator,
+  newIndexOffsetFromDocument
+} from '../model/field_index';
+import { debugAssert, fail } from '../util/assert';
 import { SortedMap } from '../util/sorted_map';
 
 import { IndexManager } from './index_manager';
@@ -37,8 +42,9 @@ import { RemoteDocumentChangeBuffer } from './remote_document_change_buffer';
 export type DocumentSizer = (doc: Document) => number;
 
 /** Miscellaneous collection types / constants. */
-interface MemoryRemoteDocumentCacheEntry extends DocumentSizeEntry {
-  readTime: SnapshotVersion;
+interface MemoryRemoteDocumentCacheEntry {
+  document: Document;
+  size: number;
 }
 
 type DocumentEntryMap = SortedMap<DocumentKey, MemoryRemoteDocumentCacheEntry>;
@@ -62,6 +68,7 @@ export interface MemoryRemoteDocumentCache extends RemoteDocumentCache {
 class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
   /** Underlying cache of documents and their read times. */
   private docs = documentEntryMap();
+  private indexManager!: IndexManager;
 
   /** Size of all cached documents. */
   private size = 0;
@@ -71,10 +78,11 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
    * expected to just return 0 to avoid unnecessarily doing the work of
    * calculating the size.
    */
-  constructor(
-    private readonly indexManager: IndexManager,
-    private readonly sizer: DocumentSizer
-  ) {}
+  constructor(private readonly sizer: DocumentSizer) {}
+
+  setIndexManager(indexManager: IndexManager): void {
+    this.indexManager = indexManager;
+  }
 
   /**
    * Adds the supplied entry to the cache and updates the cache size as appropriate.
@@ -84,11 +92,10 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
    */
   addEntry(
     transaction: PersistenceTransaction,
-    doc: MutableDocument,
-    readTime: SnapshotVersion
+    doc: MutableDocument
   ): PersistencePromise<void> {
     debugAssert(
-      !readTime.isEqual(SnapshotVersion.min()),
+      !doc.readTime.isEqual(SnapshotVersion.min()),
       'Cannot add a document with a read time of zero'
     );
 
@@ -98,9 +105,8 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
     const currentSize = this.sizer(doc);
 
     this.docs = this.docs.insert(key, {
-      document: doc.clone(),
-      size: currentSize,
-      readTime
+      document: doc.mutableCopy(),
+      size: currentSize
     });
 
     this.size += currentSize - previousSize;
@@ -132,7 +138,7 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
     const entry = this.docs.get(documentKey);
     return PersistencePromise.resolve(
       entry
-        ? entry.document.clone()
+        ? entry.document.mutableCopy()
         : MutableDocument.newInvalidDocument(documentKey)
     );
   }
@@ -147,7 +153,7 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
       results = results.insert(
         documentKey,
         entry
-          ? entry.document.clone()
+          ? entry.document.mutableCopy()
           : MutableDocument.newInvalidDocument(documentKey)
       );
     });
@@ -157,35 +163,53 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
   getDocumentsMatchingQuery(
     transaction: PersistenceTransaction,
     query: Query,
-    sinceReadTime: SnapshotVersion
+    offset: IndexOffset,
+    mutatedDocs: OverlayMap
   ): PersistencePromise<MutableDocumentMap> {
-    debugAssert(
-      !isCollectionGroupQuery(query),
-      'CollectionGroup queries should be handled in LocalDocumentsView'
-    );
     let results = mutableDocumentMap();
 
     // Documents are ordered by key, so we can use a prefix scan to narrow down
     // the documents we need to match the query against.
-    const prefix = new DocumentKey(query.path.child(''));
+    const collectionPath = query.path;
+    const prefix = new DocumentKey(collectionPath.child(''));
     const iterator = this.docs.getIteratorFrom(prefix);
     while (iterator.hasNext()) {
       const {
         key,
-        value: { document, readTime }
+        value: { document }
       } = iterator.getNext();
-      if (!query.path.isPrefixOf(key.path)) {
+      if (!collectionPath.isPrefixOf(key.path)) {
         break;
       }
-      if (readTime.compareTo(sinceReadTime) <= 0) {
+      if (key.path.length > collectionPath.length + 1) {
+        // Exclude entries from subcollections.
         continue;
       }
-      if (!queryMatches(query, document)) {
+      if (
+        indexOffsetComparator(newIndexOffsetFromDocument(document), offset) <= 0
+      ) {
+        // The document sorts before the offset.
         continue;
       }
-      results = results.insert(document.key, document.clone());
+      if (!mutatedDocs.has(document.key) && !queryMatches(query, document)) {
+        // The document cannot possibly match the query.
+        continue;
+      }
+
+      results = results.insert(document.key, document.mutableCopy());
     }
     return PersistencePromise.resolve(results);
+  }
+
+  getAllFromCollectionGroup(
+    transaction: PersistenceTransaction,
+    collectionGroup: string,
+    offset: IndexOffset,
+    limit: number
+  ): PersistencePromise<MutableDocumentMap> {
+    // This method should only be called from the IndexBackfiller if persistence
+    // is enabled.
+    fail('getAllFromCollectionGroup() is not supported.');
   }
 
   forEachDocumentKey(
@@ -211,16 +235,14 @@ class MemoryRemoteDocumentCacheImpl implements MemoryRemoteDocumentCache {
 /**
  * Creates a new memory-only RemoteDocumentCache.
  *
- * @param indexManager - A class that manages collection group indices.
  * @param sizer - Used to assess the size of a document. For eager GC, this is
  * expected to just return 0 to avoid unnecessarily doing the work of
  * calculating the size.
  */
 export function newMemoryRemoteDocumentCache(
-  indexManager: IndexManager,
   sizer: DocumentSizer
 ): MemoryRemoteDocumentCache {
-  return new MemoryRemoteDocumentCacheImpl(indexManager, sizer);
+  return new MemoryRemoteDocumentCacheImpl(sizer);
 }
 
 /**
@@ -236,14 +258,8 @@ class MemoryRemoteDocumentChangeBuffer extends RemoteDocumentChangeBuffer {
   ): PersistencePromise<void> {
     const promises: Array<PersistencePromise<void>> = [];
     this.changes.forEach((key, doc) => {
-      if (doc.document.isValidDocument()) {
-        promises.push(
-          this.documentCache.addEntry(
-            transaction,
-            doc.document,
-            this.getReadTime(key)
-          )
-        );
+      if (doc.isValidDocument()) {
+        promises.push(this.documentCache.addEntry(transaction, doc));
       } else {
         this.documentCache.removeEntry(key);
       }

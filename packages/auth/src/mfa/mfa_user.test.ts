@@ -16,7 +16,7 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
 
 import { FactorId } from '../model/public_types';
@@ -83,6 +83,12 @@ describe('core/mfa/mfa_user/MultiFactorUser', () => {
       const mfaSession = (await mfaUser.getSession()) as MultiFactorSessionImpl;
       expect(mfaSession.type).to.eq(MultiFactorSessionType.ENROLL);
       expect(mfaSession.credential).to.eq('access-token');
+    });
+    it('should contain a reference to auth', async () => {
+      const mfaSession = (await mfaUser.getSession()) as MultiFactorSessionImpl;
+      expect(mfaSession.type).to.eq(MultiFactorSessionType.ENROLL);
+      expect(mfaSession.credential).to.eq('access-token');
+      expect(mfaSession.user?.auth).to.eq(auth);
     });
   });
 
@@ -188,7 +194,7 @@ describe('core/mfa/mfa_user/MultiFactorUser', () => {
 
       expect(withdrawMfaEnrollmentMock.calls[0].request).to.eql({
         idToken: 'access-token',
-        mfaEnrollmentId: mfaInfo.uid,
+        mfaEnrollmentId: mfaInfo.uid
       });
     });
 
@@ -203,7 +209,7 @@ describe('core/mfa/mfa_user/MultiFactorUser', () => {
 
       expect(withdrawMfaEnrollmentMock.calls[0].request).to.eql({
         idToken: 'access-token',
-        mfaEnrollmentId: mfaInfo.uid,
+        mfaEnrollmentId: mfaInfo.uid
       });
     });
 
@@ -229,8 +235,10 @@ describe('core/mfa/mfa_user/MultiFactorUser', () => {
         );
       });
 
-      it('should swallow the error', async () => {
-        await mfaUser.unenroll(mfaInfo);
+      it('should throw TOKEN_EXPIRED error', async () => {
+        await expect(mfaUser.unenroll(mfaInfo)).to.be.rejectedWith(
+          'auth/user-token-expired'
+        );
       });
     });
   });

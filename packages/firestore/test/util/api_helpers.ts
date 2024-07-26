@@ -19,30 +19,20 @@
 // these in any integration test, where we expect working Firestore object.
 
 import {
-  CollectionReference,
   DocumentReference,
-  DocumentSnapshot,
-  Firestore,
-  IndexedDbPersistenceProvider,
-  Query,
-  QuerySnapshot,
-  UserDataWriter
-} from '../../compat/api/database';
-import { EmptyCredentialsProvider } from '../../src/api/credentials';
-import {
   ensureFirestoreConfigured,
-  Firestore as ExpFirestore
-} from '../../src/api/database';
-import {
-  Query as ExpQuery,
-  CollectionReference as ExpCollectionReference
-} from '../../src/api/reference';
-import { ExpUserDataWriter } from '../../src/api/reference_impl';
-import {
-  QuerySnapshot as ExpQuerySnapshot,
-  DocumentSnapshot as ExpDocumentSnapshot,
+  Firestore,
+  Query,
+  CollectionReference,
+  QuerySnapshot,
+  DocumentSnapshot,
   SnapshotMetadata
-} from '../../src/api/snapshot';
+} from '../../src';
+import {
+  EmptyAppCheckTokenProvider,
+  EmptyAuthCredentialsProvider
+} from '../../src/api/credentials';
+import { ExpUserDataWriter } from '../../src/api/reference_impl';
 import { DatabaseId } from '../../src/core/database_info';
 import { newQueryForPath, Query as InternalQuery } from '../../src/core/query';
 import {
@@ -68,29 +58,22 @@ export function firestore(): Firestore {
 
 export function newTestFirestore(projectId = 'new-project'): Firestore {
   return new Firestore(
-    new DatabaseId(projectId),
-    new ExpFirestore(new DatabaseId(projectId), new EmptyCredentialsProvider()),
-    new IndexedDbPersistenceProvider()
+    new EmptyAuthCredentialsProvider(),
+    new EmptyAppCheckTokenProvider(),
+    new DatabaseId(projectId)
   );
 }
 
 export function collectionReference(path: string): CollectionReference {
   const db = firestore();
-  ensureFirestoreConfigured(db._delegate);
-  return new CollectionReference(
-    db,
-    new ExpCollectionReference(
-      db._delegate,
-      /* converter= */ null,
-      pathFrom(path)
-    )
-  );
+  ensureFirestoreConfigured(db);
+  return new CollectionReference(db, /* converter= */ null, pathFrom(path));
 }
 
 export function documentReference(path: string): DocumentReference {
   const db = firestore();
-  ensureFirestoreConfigured(db._delegate);
-  return DocumentReference.forKey(key(path), db, /* converter= */ null);
+  ensureFirestoreConfigured(db);
+  return new DocumentReference(db, /* converter= */ null, key(path));
 }
 
 export function documentSnapshot(
@@ -99,44 +82,31 @@ export function documentSnapshot(
   fromCache: boolean
 ): DocumentSnapshot {
   const db = firestore();
-  const userDataWriter = new UserDataWriter(db);
+  const userDataWriter = new ExpUserDataWriter(db);
   if (data) {
     return new DocumentSnapshot(
-      firestore(),
-      new ExpDocumentSnapshot(
-        db._delegate,
-        userDataWriter,
-        key(path),
-        doc(path, 1, data),
-        new SnapshotMetadata(/* hasPendingWrites= */ false, fromCache),
-        /* converter= */ null
-      )
+      db,
+      userDataWriter,
+      key(path),
+      doc(path, 1, data),
+      new SnapshotMetadata(/* hasPendingWrites= */ false, fromCache),
+      /* converter= */ null
     );
   } else {
     return new DocumentSnapshot(
-      firestore(),
-      new ExpDocumentSnapshot(
-        db._delegate,
-        userDataWriter,
-        key(path),
-        null,
-        new SnapshotMetadata(/* hasPendingWrites= */ false, fromCache),
-        /* converter= */ null
-      )
+      db,
+      userDataWriter,
+      key(path),
+      null,
+      new SnapshotMetadata(/* hasPendingWrites= */ false, fromCache),
+      /* converter= */ null
     );
   }
 }
 
 export function query(path: string): Query {
   const db = firestore();
-  return new Query(
-    db,
-    new ExpQuery(
-      db._delegate,
-      /* converter= */ null,
-      newQueryForPath(pathFrom(path))
-    )
-  );
+  return new Query(db, /* converter= */ null, newQueryForPath(pathFrom(path)));
 }
 
 /**
@@ -160,7 +130,8 @@ export function querySnapshot(
   docsToAdd: { [key: string]: JsonObject<unknown> },
   mutatedKeys: DocumentKeySet,
   fromCache: boolean,
-  syncStateChanged: boolean
+  syncStateChanged: boolean,
+  hasCachedResults?: boolean
 ): QuerySnapshot {
   const query: InternalQuery = newQueryForPath(pathFrom(path));
   let oldDocuments: DocumentSet = new DocumentSet();
@@ -182,16 +153,14 @@ export function querySnapshot(
     mutatedKeys,
     fromCache,
     syncStateChanged,
-    false
+    false,
+    hasCachedResults ?? false
   );
   const db = firestore();
   return new QuerySnapshot(
     db,
-    new ExpQuerySnapshot(
-      db._delegate,
-      new ExpUserDataWriter(db._delegate),
-      new ExpQuery(db._delegate, /* converter= */ null, query),
-      viewSnapshot
-    )
+    new ExpUserDataWriter(db),
+    new Query(db, /* converter= */ null, query),
+    viewSnapshot
   );
 }

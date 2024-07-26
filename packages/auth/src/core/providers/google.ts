@@ -26,7 +26,7 @@ import { BaseOAuthProvider } from './oauth';
 import { ProviderId, SignInMethod } from '../../model/enums';
 
 /**
- * Provider for generating an an {@link OAuthCredential} for {@link ProviderId}.GOOGLE.
+ * Provider for generating an {@link OAuthCredential} for {@link ProviderId}.GOOGLE.
  *
  * @example
  * ```javascript
@@ -44,7 +44,7 @@ import { ProviderId, SignInMethod } from '../../model/enums';
  *   // This is the signed-in user
  *   const user = result.user;
  *   // This gives you a Google Access Token.
- *   const credential = provider.credentialFromResult(auth, result);
+ *   const credential = GoogleAuthProvider.credentialFromResult(result);
  *   const token = credential.accessToken;
  * }
  * ```
@@ -60,7 +60,7 @@ import { ProviderId, SignInMethod } from '../../model/enums';
  * // The signed-in user info.
  * const user = result.user;
  * // This gives you a Google Access Token.
- * const credential = provider.credentialFromResult(auth, result);
+ * const credential = GoogleAuthProvider.credentialFromResult(result);
  * const token = credential.accessToken;
  * ```
  *

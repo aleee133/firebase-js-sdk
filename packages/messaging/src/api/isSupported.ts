@@ -15,7 +15,11 @@
  * limitations under the License.
  */
 
-import { validateIndexedDBOpenable } from '@firebase/util';
+import {
+  areCookiesEnabled,
+  isIndexedDBAvailable,
+  validateIndexedDBOpenable
+} from '@firebase/util';
 
 /**
  * Checks if all required APIs exist in the browser.
@@ -24,14 +28,20 @@ import { validateIndexedDBOpenable } from '@firebase/util';
  * @public
  */
 export async function isWindowSupported(): Promise<boolean> {
+  try {
+    // This throws if open() is unsupported, so adding it to the conditional
+    // statement below can cause an uncaught error.
+    await validateIndexedDBOpenable();
+  } catch (e) {
+    return false;
+  }
   // firebase-js-sdk/issues/2393 reveals that idb#open in Safari iframe and Firefox private browsing
   // might be prohibited to run. In these contexts, an error would be thrown during the messaging
   // instantiating phase, informing the developers to import/call isSupported for special handling.
   return (
-    (await validateIndexedDBOpenable()) &&
-    'indexedDB' in window &&
-    indexedDB !== null &&
-    navigator.cookieEnabled &&
+    typeof window !== 'undefined' &&
+    isIndexedDBAvailable() &&
+    areCookiesEnabled() &&
     'serviceWorker' in navigator &&
     'PushManager' in window &&
     'Notification' in window &&
@@ -52,9 +62,8 @@ export async function isSwSupported(): Promise<boolean> {
   // might be prohibited to run. In these contexts, an error would be thrown during the messaging
   // instantiating phase, informing the developers to import/call isSupported for special handling.
   return (
+    isIndexedDBAvailable() &&
     (await validateIndexedDBOpenable()) &&
-    'indexedDB' in self &&
-    indexedDB !== null &&
     'PushManager' in self &&
     'Notification' in self &&
     ServiceWorkerRegistration.prototype.hasOwnProperty('showNotification') &&

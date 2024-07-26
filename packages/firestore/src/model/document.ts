@@ -41,7 +41,7 @@ const enum DocumentType {
    * Represents a document in Firestore with a key, version, data and whether
    * the data has local mutations applied to it.
    *
-   * Found documents can be sycned or have or committed mutations applied.
+   * Found documents can be synced or have or committed mutations applied.
    */
   FOUND_DOCUMENT,
   /**
@@ -95,6 +95,19 @@ export interface Document {
    */
   readonly version: SnapshotVersion;
 
+  /**
+   * The timestamp at which this document was read from the remote server. Uses
+   * `SnapshotVersion.min()` for documents created by the user.
+   */
+  readonly readTime: SnapshotVersion;
+
+  /**
+   * The timestamp at which the document was created. This value increases
+   * monotonically when a document is deleted then recreated. It can also be
+   * compared to `createTime` of other documents and the `readTime` of a query.
+   */
+  readonly createTime: SnapshotVersion;
+
   /** The underlying data of this document or an empty value if no data exists. */
   readonly data: ObjectValue;
 
@@ -135,6 +148,9 @@ export interface Document {
 
   isEqual(other: Document | null | undefined): boolean;
 
+  /** Creates a mutable copy of this document. */
+  mutableCopy(): MutableDocument;
+
   toString(): string;
 }
 
@@ -153,6 +169,8 @@ export class MutableDocument implements Document {
     readonly key: DocumentKey,
     private documentType: DocumentType,
     public version: SnapshotVersion,
+    public readTime: SnapshotVersion,
+    public createTime: SnapshotVersion,
     public data: ObjectValue,
     private documentState: DocumentState
   ) {}
@@ -165,7 +183,9 @@ export class MutableDocument implements Document {
     return new MutableDocument(
       documentKey,
       DocumentType.INVALID,
-      SnapshotVersion.min(),
+      /* version */ SnapshotVersion.min(),
+      /* readTime */ SnapshotVersion.min(),
+      /* createTime */ SnapshotVersion.min(),
       ObjectValue.empty(),
       DocumentState.SYNCED
     );
@@ -178,12 +198,15 @@ export class MutableDocument implements Document {
   static newFoundDocument(
     documentKey: DocumentKey,
     version: SnapshotVersion,
+    createTime: SnapshotVersion,
     value: ObjectValue
   ): MutableDocument {
     return new MutableDocument(
       documentKey,
       DocumentType.FOUND_DOCUMENT,
-      version,
+      /* version */ version,
+      /* readTime */ SnapshotVersion.min(),
+      /* createTime */ createTime,
       value,
       DocumentState.SYNCED
     );
@@ -197,7 +220,9 @@ export class MutableDocument implements Document {
     return new MutableDocument(
       documentKey,
       DocumentType.NO_DOCUMENT,
-      version,
+      /* version */ version,
+      /* readTime */ SnapshotVersion.min(),
+      /* createTime */ SnapshotVersion.min(),
       ObjectValue.empty(),
       DocumentState.SYNCED
     );
@@ -215,7 +240,9 @@ export class MutableDocument implements Document {
     return new MutableDocument(
       documentKey,
       DocumentType.UNKNOWN_DOCUMENT,
-      version,
+      /* version */ version,
+      /* readTime */ SnapshotVersion.min(),
+      /* createTime */ SnapshotVersion.min(),
       ObjectValue.empty(),
       DocumentState.HAS_COMMITTED_MUTATIONS
     );
@@ -229,6 +256,18 @@ export class MutableDocument implements Document {
     version: SnapshotVersion,
     value: ObjectValue
   ): MutableDocument {
+    // If a document is switching state from being an invalid or deleted
+    // document to a valid (FOUND_DOCUMENT) document, either due to receiving an
+    // update from Watch or due to applying a local set mutation on top
+    // of a deleted document, our best guess about its createTime would be the
+    // version at which the document transitioned to a FOUND_DOCUMENT.
+    if (
+      this.createTime.isEqual(SnapshotVersion.min()) &&
+      (this.documentType === DocumentType.NO_DOCUMENT ||
+        this.documentType === DocumentType.INVALID)
+    ) {
+      this.createTime = version;
+    }
     this.version = version;
     this.documentType = DocumentType.FOUND_DOCUMENT;
     this.data = value;
@@ -271,11 +310,13 @@ export class MutableDocument implements Document {
   }
 
   setHasLocalMutations(): MutableDocument {
-    debugAssert(
-      this.isFoundDocument(),
-      'Only found documents can have local mutations'
-    );
     this.documentState = DocumentState.HAS_LOCAL_MUTATIONS;
+    this.version = SnapshotVersion.min();
+    return this;
+  }
+
+  setReadTime(readTime: SnapshotVersion): MutableDocument {
+    this.readTime = readTime;
     return this;
   }
 
@@ -318,11 +359,13 @@ export class MutableDocument implements Document {
     );
   }
 
-  clone(): MutableDocument {
+  mutableCopy(): MutableDocument {
     return new MutableDocument(
       this.key,
       this.documentType,
       this.version,
+      this.readTime,
+      this.createTime,
       this.data.clone(),
       this.documentState
     );
@@ -333,6 +376,7 @@ export class MutableDocument implements Document {
       `Document(${this.key}, ${this.version}, ${JSON.stringify(
         this.data.value
       )}, ` +
+      `{createTime: ${this.createTime}}), ` +
       `{documentType: ${this.documentType}}), ` +
       `{documentState: ${this.documentState}})`
     );

@@ -16,7 +16,7 @@
  */
 
 import { ERROR_FACTORY, ErrorCode } from '../utils/errors';
-import { isIndexedDBAvailable } from '@firebase/util';
+import { isIndexedDBAvailable, areCookiesEnabled } from '@firebase/util';
 import { consoleLogger } from '../utils/console_logger';
 
 declare global {
@@ -43,7 +43,7 @@ export type EntryType =
  */
 export class Api {
   private readonly performance: Performance;
-  /** PreformanceObserver constructor function. */
+  /** PerformanceObserver constructor function. */
   private readonly PerformanceObserver: typeof PerformanceObserver;
   private readonly windowLocation: Location;
   readonly onFirstInputDelay?: (fn: (fid: number) => void) => void;
@@ -112,12 +112,7 @@ export class Api {
   }
 
   requiredApisAvailable(): boolean {
-    if (
-      !fetch ||
-      !Promise ||
-      !this.navigator ||
-      !this.navigator.cookieEnabled
-    ) {
+    if (!fetch || !Promise || !areCookiesEnabled()) {
       consoleLogger.info(
         'Firebase Performance cannot start if browser does not support fetch and Promise or cookie is disabled.'
       );
@@ -125,7 +120,7 @@ export class Api {
     }
 
     if (!isIndexedDBAvailable()) {
-      consoleLogger.info('IndexedDB is not supported by current browswer');
+      consoleLogger.info('IndexedDB is not supported by current browser');
       return false;
     }
     return true;

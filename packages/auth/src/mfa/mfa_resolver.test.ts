@@ -16,7 +16,7 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
 
 import { FactorId } from '../model/public_types';
@@ -54,7 +54,7 @@ describe('core/mfa/mfa_resolver/MultiFactorResolver', () => {
     auth = await testAuth();
     auth.tenantId = 'tenant-id';
     underlyingError = _createError(auth, AuthErrorCode.MFA_REQUIRED, {
-      serverResponse: {
+      _serverResponse: {
         localId: 'local-id',
         mfaPendingCredential: 'mfa-pending-credential',
         mfaInfo: [
@@ -114,7 +114,7 @@ describe('core/mfa/mfa_resolver/MultiFactorResolver', () => {
       };
 
       beforeEach(() => {
-        mock = mockEndpoint(Endpoint.FINALIZE_PHONE_MFA_SIGN_IN, {
+        mock = mockEndpoint(Endpoint.FINALIZE_MFA_SIGN_IN, {
           idToken: finalIdToken,
           refreshToken: 'final-refresh-token'
         });

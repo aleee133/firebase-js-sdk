@@ -40,7 +40,7 @@ const FID = 'evil-has-no-boundaries';
 
 describe('generateAuthTokenRequest', () => {
   let installations: FirebaseInstallationsImpl;
-  let fetchSpy: SinonStub<[RequestInfo, RequestInit?], Promise<Response>>;
+  let fetchSpy: SinonStub<[RequestInfo | URL, RequestInit?], Promise<Response>>;
   let registeredInstallationEntry: RegisteredInstallationEntry;
   let response: GenerateAuthTokenResponse;
 
@@ -71,10 +71,11 @@ describe('generateAuthTokenRequest', () => {
     });
 
     it('fetches a new Authentication Token', async () => {
-      const completedAuthToken: CompletedAuthToken = await generateAuthTokenRequest(
-        installations,
-        registeredInstallationEntry
-      );
+      const completedAuthToken: CompletedAuthToken =
+        await generateAuthTokenRequest(
+          installations,
+          registeredInstallationEntry
+        );
       expect(completedAuthToken.requestStatus).to.equal(
         RequestStatus.COMPLETED
       );
@@ -90,7 +91,8 @@ describe('generateAuthTokenRequest', () => {
       });
       const expectedBody = {
         installation: {
-          sdkVersion: PACKAGE_VERSION
+          sdkVersion: PACKAGE_VERSION,
+          appId: installations.appConfig.appId
         }
       };
       const expectedRequest: RequestInit = {

@@ -15,54 +15,59 @@
  * limitations under the License.
  */
 
-import {
-  Metadata,
-  GrpcObject,
-  credentials as GrpcCredentials,
-  ServiceError
-} from '@grpc/grpc-js';
-import { version as grpcVersion } from '@grpc/grpc-js/package.json';
+// Note: We have to use a package import here to avoid build errors such as
+// https://github.com/firebase/firebase-js-sdk/issues/5983
+import * as grpc from '@grpc/grpc-js';
 
 import { Token } from '../../api/credentials';
 import { DatabaseInfo } from '../../core/database_info';
 import { SDK_VERSION } from '../../core/version';
+import { ResourcePath } from '../../model/path';
 import { Connection, Stream } from '../../remote/connection';
 import { mapCodeFromRpcCode } from '../../remote/rpc_error';
 import { StreamBridge } from '../../remote/stream_bridge';
 import { hardAssert } from '../../util/assert';
+import { generateUniqueDebugId } from '../../util/debug_uid';
 import { FirestoreError } from '../../util/error';
 import { logError, logDebug, logWarn } from '../../util/log';
 import { NodeCallback, nodePromise } from '../../util/node_api';
 import { Deferred } from '../../util/promise';
 
-const LOG_TAG = 'Connection';
+// TODO: Fetch runtime version from grpc-js/package.json instead
+// when there's a cleaner way to dynamic require JSON in both Node ESM and CJS
+const grpcVersion = '__GRPC_VERSION__';
+
+const LOG_TAG = 'GrpcConnection';
 const X_GOOG_API_CLIENT_VALUE = `gl-node/${process.versions.node} fire/${SDK_VERSION} grpc/${grpcVersion}`;
 
 function createMetadata(
   databasePath: string,
-  token: Token | null,
+  authToken: Token | null,
+  appCheckToken: Token | null,
   appId: string
-): Metadata {
+): grpc.Metadata {
   hardAssert(
-    token === null || token.type === 'OAuth',
+    authToken === null || authToken.type === 'OAuth',
     'If provided, token must be OAuth'
   );
-
-  const metadata = new Metadata();
-  if (token) {
-    for (const header in token.authHeaders) {
-      if (token.authHeaders.hasOwnProperty(header)) {
-        metadata.set(header, token.authHeaders[header]);
-      }
-    }
+  const metadata = new grpc.Metadata();
+  if (authToken) {
+    authToken.headers.forEach((value, key) => metadata.set(key, value));
+  }
+  if (appCheckToken) {
+    appCheckToken.headers.forEach((value, key) => metadata.set(key, value));
   }
   if (appId) {
     metadata.set('X-Firebase-GMPID', appId);
   }
   metadata.set('X-Goog-Api-Client', X_GOOG_API_CLIENT_VALUE);
-  // This header is used to improve routing and project isolation by the
+  // These headers are used to improve routing and project isolation by the
   // backend.
+  // TODO(b/199767712): We are keeping 'Google-Cloud-Resource-Prefix' until Emulators can be
+  // released with cl/428820046. Currently blocked because Emulators are now built with Java
+  // 11 from Google3.
   metadata.set('Google-Cloud-Resource-Prefix', databasePath);
+  metadata.set('x-goog-request-params', databasePath);
   return metadata;
 }
 
@@ -82,7 +87,13 @@ export class GrpcConnection implements Connection {
   // We cache stubs for the most-recently-used token.
   private cachedStub: GeneratedGrpcStub | null = null;
 
-  constructor(protos: GrpcObject, private databaseInfo: DatabaseInfo) {
+  get shouldResourcePathBeIncludedInRequest(): boolean {
+    // Both `invokeRPC()` and `invokeStreamingRPC()` ignore their `path` arguments, and expect
+    // the "path" to be part of the given `request`.
+    return true;
+  }
+
+  constructor(protos: grpc.GrpcObject, private databaseInfo: DatabaseInfo) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.firestore = (protos as any)['google']['firestore']['v1'];
     this.databasePath = `projects/${databaseInfo.databaseId.projectId}/databases/${databaseInfo.databaseId.database}`;
@@ -92,8 +103,8 @@ export class GrpcConnection implements Connection {
     if (!this.cachedStub) {
       logDebug(LOG_TAG, 'Creating Firestore stub.');
       const credentials = this.databaseInfo.ssl
-        ? GrpcCredentials.createSsl()
-        : GrpcCredentials.createInsecure();
+        ? grpc.credentials.createSsl()
+        : grpc.credentials.createInsecure();
       this.cachedStub = new this.firestore.Firestore(
         this.databaseInfo.host,
         credentials
@@ -104,26 +115,37 @@ export class GrpcConnection implements Connection {
 
   invokeRPC<Req, Resp>(
     rpcName: string,
-    path: string,
+    path: ResourcePath,
     request: Req,
-    token: Token | null
+    authToken: Token | null,
+    appCheckToken: Token | null
   ): Promise<Resp> {
+    const streamId = generateUniqueDebugId();
     const stub = this.ensureActiveStub();
     const metadata = createMetadata(
       this.databasePath,
-      token,
+      authToken,
+      appCheckToken,
       this.databaseInfo.appId
     );
     const jsonRequest = { database: this.databasePath, ...request };
 
     return nodePromise((callback: NodeCallback<Resp>) => {
-      logDebug(LOG_TAG, `RPC '${rpcName}' invoked with request:`, request);
+      logDebug(
+        LOG_TAG,
+        `RPC '${rpcName}' ${streamId} invoked with request:`,
+        request
+      );
       return stub[rpcName](
         jsonRequest,
         metadata,
-        (grpcError?: ServiceError, value?: Resp) => {
+        (grpcError?: grpc.ServiceError, value?: Resp) => {
           if (grpcError) {
-            logDebug(LOG_TAG, `RPC '${rpcName}' failed with error:`, grpcError);
+            logDebug(
+              LOG_TAG,
+              `RPC '${rpcName}' ${streamId} failed with error:`,
+              grpcError
+            );
             callback(
               new FirestoreError(
                 mapCodeFromRpcCode(grpcError.code),
@@ -133,7 +155,7 @@ export class GrpcConnection implements Connection {
           } else {
             logDebug(
               LOG_TAG,
-              `RPC '${rpcName}' completed with response:`,
+              `RPC '${rpcName}' ${streamId} completed with response:`,
               value
             );
             callback(undefined, value);
@@ -145,36 +167,58 @@ export class GrpcConnection implements Connection {
 
   invokeStreamingRPC<Req, Resp>(
     rpcName: string,
-    path: string,
+    path: ResourcePath,
     request: Req,
-    token: Token | null
+    authToken: Token | null,
+    appCheckToken: Token | null,
+    expectedResponseCount?: number
   ): Promise<Resp[]> {
+    const streamId = generateUniqueDebugId();
     const results: Resp[] = [];
     const responseDeferred = new Deferred<Resp[]>();
-
     logDebug(
       LOG_TAG,
-      `RPC '${rpcName}' invoked (streaming) with request:`,
+      `RPC '${rpcName}' ${streamId} invoked (streaming) with request:`,
       request
     );
     const stub = this.ensureActiveStub();
     const metadata = createMetadata(
       this.databasePath,
-      token,
+      authToken,
+      appCheckToken,
       this.databaseInfo.appId
     );
     const jsonRequest = { ...request, database: this.databasePath };
     const stream = stub[rpcName](jsonRequest, metadata);
+    let callbackFired = false;
     stream.on('data', (response: Resp) => {
-      logDebug(LOG_TAG, `RPC ${rpcName} received result:`, response);
+      logDebug(
+        LOG_TAG,
+        `RPC ${rpcName} ${streamId} received result:`,
+        response
+      );
       results.push(response);
+      if (
+        expectedResponseCount !== undefined &&
+        results.length === expectedResponseCount
+      ) {
+        callbackFired = true;
+        responseDeferred.resolve(results);
+      }
     });
     stream.on('end', () => {
-      logDebug(LOG_TAG, `RPC '${rpcName}' completed.`);
-      responseDeferred.resolve(results);
+      logDebug(LOG_TAG, `RPC '${rpcName}' ${streamId} completed.`);
+      if (!callbackFired) {
+        callbackFired = true;
+        responseDeferred.resolve(results);
+      }
     });
-    stream.on('error', (grpcError: ServiceError) => {
-      logDebug(LOG_TAG, `RPC '${rpcName}' failed with error:`, grpcError);
+    stream.on('error', (grpcError: grpc.ServiceError) => {
+      logDebug(
+        LOG_TAG,
+        `RPC '${rpcName}' ${streamId} failed with error:`,
+        grpcError
+      );
       const code = mapCodeFromRpcCode(grpcError.code);
       responseDeferred.reject(new FirestoreError(code, grpcError.message));
     });
@@ -185,12 +229,15 @@ export class GrpcConnection implements Connection {
   // TODO(mikelehen): This "method" is a monster. Should be refactored.
   openStream<Req, Resp>(
     rpcName: string,
-    token: Token | null
+    authToken: Token | null,
+    appCheckToken: Token | null
   ): Stream<Req, Resp> {
+    const streamId = generateUniqueDebugId();
     const stub = this.ensureActiveStub();
     const metadata = createMetadata(
       this.databasePath,
-      token,
+      authToken,
+      appCheckToken,
       this.databaseInfo.appId
     );
     const grpcStream = stub[rpcName](metadata);
@@ -207,7 +254,11 @@ export class GrpcConnection implements Connection {
     const stream = new StreamBridge<Req, Resp>({
       sendFn: (msg: Req) => {
         if (!closed) {
-          logDebug(LOG_TAG, 'GRPC stream sending:', msg);
+          logDebug(
+            LOG_TAG,
+            `RPC '${rpcName}' stream ${streamId} sending:`,
+            msg
+          );
           try {
             grpcStream.write(msg);
           } catch (e) {
@@ -218,32 +269,46 @@ export class GrpcConnection implements Connection {
             throw e;
           }
         } else {
-          logDebug(LOG_TAG, 'Not sending because gRPC stream is closed:', msg);
+          logDebug(
+            LOG_TAG,
+            `RPC '${rpcName}' stream ${streamId} ` +
+              'not sending because gRPC stream is closed:',
+            msg
+          );
         }
       },
       closeFn: () => {
-        logDebug(LOG_TAG, 'GRPC stream closed locally via close().');
+        logDebug(
+          LOG_TAG,
+          `RPC '${rpcName}' stream ${streamId} closed locally via close().`
+        );
         close();
       }
     });
 
+    let onConnectedSent = false;
     grpcStream.on('data', (msg: Resp) => {
       if (!closed) {
-        logDebug(LOG_TAG, 'GRPC stream received:', msg);
+        logDebug(LOG_TAG, `RPC '${rpcName}' stream ${streamId} received:`, msg);
+        // Emulate the "onConnected" event that WebChannelConnection sends.
+        if (!onConnectedSent) {
+          stream.callOnConnected();
+          onConnectedSent = true;
+        }
         stream.callOnMessage(msg);
       }
     });
 
     grpcStream.on('end', () => {
-      logDebug(LOG_TAG, 'GRPC stream ended.');
+      logDebug(LOG_TAG, `RPC '${rpcName}' stream ${streamId} ended.`);
       close();
     });
 
-    grpcStream.on('error', (grpcError: ServiceError) => {
+    grpcStream.on('error', (grpcError: grpc.ServiceError) => {
       if (!closed) {
         logWarn(
           LOG_TAG,
-          'GRPC stream error. Code:',
+          `RPC '${rpcName}' stream ${streamId} error. Code:`,
           grpcError.code,
           'Message:',
           grpcError.message
@@ -253,7 +318,11 @@ export class GrpcConnection implements Connection {
       }
     });
 
-    logDebug(LOG_TAG, 'Opening GRPC stream');
+    logDebug(
+      LOG_TAG,
+      `Opening RPC '${rpcName}' stream ${streamId} ` +
+        `to ${this.databaseInfo.host}`
+    );
     // TODO(dimond): Since grpc has no explicit open status (or does it?) we
     // simulate an onOpen in the next loop after the stream had it's listeners
     // registered
@@ -262,5 +331,18 @@ export class GrpcConnection implements Connection {
     }, 0);
 
     return stream;
+  }
+
+  /**
+   * Closes and cleans up any resources associated with the GrpcConnection.
+   * If a gRPC client has been generated for this connection, the gRPC client
+   * is closed. Failure to call terminate on a GrpcConnection can result
+   * in leaked resources of the gRPC client.
+   */
+  terminate(): void {
+    if (this.cachedStub) {
+      this.cachedStub.close();
+      this.cachedStub = undefined;
+    }
   }
 }

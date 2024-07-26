@@ -17,9 +17,9 @@
 
 import { expect } from 'chai';
 
-import { Blob } from '../../../compat/api/blob';
-import { GeoPoint } from '../../../src/api/geo_point';
-import { Timestamp } from '../../../src/api/timestamp';
+import { Bytes, GeoPoint, Timestamp } from '../../../src';
+import { Bound, boundEquals } from '../../../src/core/bound';
+import { OrderBy } from '../../../src/core/order_by';
 import {
   canonifyQuery,
   LimitType,
@@ -27,42 +27,43 @@ import {
   newQueryForPath,
   Query,
   queryMatches,
-  queryOrderBy,
+  queryNormalizedOrderBy,
   queryWithAddedFilter,
   queryWithEndAt,
   queryWithLimit,
   queryWithStartAt,
   stringifyQuery,
+  queryToAggregateTarget,
   queryToTarget,
   QueryImpl,
   queryEquals,
-  matchesAllDocuments
+  queryMatchesAllDocuments,
+  queryCollectionGroup,
+  newQueryForCollectionGroup
 } from '../../../src/core/query';
-import {
-  Bound,
-  boundEquals,
-  canonifyTarget,
-  OrderBy
-} from '../../../src/core/target';
+import { canonifyTarget } from '../../../src/core/target';
+import { MutableDocument } from '../../../src/model/document';
 import { DOCUMENT_KEY_NAME, ResourcePath } from '../../../src/model/path';
 import { addEqualityMatcher } from '../../util/equality_matcher';
 import {
+  andFilter,
   bound,
   doc,
   expectCorrectComparisons,
   expectEqualitySets,
   filter,
   orderBy,
+  orFilter,
   query,
   ref,
   wrap
 } from '../../util/helpers';
 
 describe('Bound', () => {
-  function makeBound(values: unknown[], before: boolean): Bound {
+  function makeBound(values: unknown[], inclusive: boolean): Bound {
     return new Bound(
       values.map(el => wrap(el)),
-      before
+      inclusive
     );
   }
 
@@ -90,6 +91,14 @@ describe('Bound', () => {
 
 describe('Query', () => {
   addEqualityMatcher({ equalsFn: queryEquals, forType: QueryImpl });
+
+  it('can get collection group', () => {
+    expect(queryCollectionGroup(query('foo'))).to.equal('foo');
+    expect(queryCollectionGroup(query('foo/bar'))).to.equal('foo');
+    expect(queryCollectionGroup(newQueryForCollectionGroup('foo'))).to.equal(
+      'foo'
+    );
+  });
 
   it('matches based on document key', () => {
     const queryKey = new ResourcePath(['rooms', 'eros', 'messages', '1']);
@@ -556,9 +565,9 @@ describe('Query', () => {
     const q7a = queryWithLimit(query('foo'), 10, LimitType.First);
     const q8a = queryWithLimit(query('foo'), 10, LimitType.Last);
 
-    const lip1a = bound([[DOCUMENT_KEY_NAME, 'coll/foo', 'asc']], true);
-    const lip1b = bound([[DOCUMENT_KEY_NAME, 'coll/foo', 'asc']], false);
-    const lip2 = bound([[DOCUMENT_KEY_NAME, 'coll/bar', 'asc']], true);
+    const lip1a = bound(['coll/foo'], false);
+    const lip1b = bound(['coll/foo'], true);
+    const lip2 = bound(['coll/bar'], false);
     // TODO(b/35851862): descending key ordering not supported yet
     // const lip3 = bound([[DOCUMENT_KEY_NAME, 'coll/bar', 'desc']]);
 
@@ -647,7 +656,7 @@ describe('Query', () => {
     assertCanonicalId(
       query(
         'collection',
-        filter('a', '>=', Blob.fromUint8Array(new Uint8Array([1, 2, 3])))
+        filter('a', '>=', Bytes.fromUint8Array(new Uint8Array([1, 2, 3])))
       ),
       'collection|f:a>=AQID|ob:aasc,__name__asc'
     );
@@ -697,26 +706,14 @@ describe('Query', () => {
     assertCanonicalId(
       queryWithStartAt(
         query('collection', orderBy('a', 'asc'), orderBy('b', 'asc')),
-        bound(
-          [
-            ['a', 'foo', 'asc'],
-            ['b', [1, 2, 3], 'asc']
-          ],
-          true
-        )
+        bound(['foo', [1, 2, 3]], true)
       ),
       'collection|f:|ob:aasc,basc,__name__asc|lb:b:foo,[1,2,3]'
     );
     assertCanonicalId(
       queryWithEndAt(
         query('collection', orderBy('a', 'desc'), orderBy('b', 'desc')),
-        bound(
-          [
-            ['a', 'foo', 'desc'],
-            ['b', [1, 2, 3], 'desc']
-          ],
-          false
-        )
+        bound(['foo', [1, 2, 3]], true)
       ),
       'collection|f:|ob:adesc,bdesc,__name__desc|ub:a:foo,[1,2,3]'
     );
@@ -781,31 +778,320 @@ describe('Query', () => {
     );
   });
 
-  it('matchesAllDocuments() considers filters, orders and bounds', () => {
-    const baseQuery = newQueryForPath(ResourcePath.fromString('collection'));
-    expect(matchesAllDocuments(baseQuery)).to.be.true;
+  it("generates the correct implicit order by's for multiple inequality", () => {
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('a', '<', 5),
+        filter('a', '>=', 5),
+        filter('aa', '>', 5),
+        filter('b', '>', 5),
+        filter('A', '>', 5)
+      ),
+      orderBy('A'),
+      orderBy('a'),
+      orderBy('aa'),
+      orderBy('b'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
 
-    let query1 = query('collection', orderBy('__name__'));
-    expect(matchesAllDocuments(query1)).to.be.true;
+    // numbers
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('a', '<', 5),
+        filter('1', '>', 5),
+        filter('19', '>', 5),
+        filter('2', '>', 5)
+      ),
+      orderBy('1'),
+      orderBy('19'),
+      orderBy('2'),
+      orderBy('a'),
 
-    query1 = query('collection', orderBy('foo'));
-    expect(matchesAllDocuments(query1)).to.be.false;
+      orderBy(DOCUMENT_KEY_NAME)
+    );
 
-    query1 = query('collection', filter('foo', '==', 'bar'));
-    expect(matchesAllDocuments(query1)).to.be.false;
+    // nested fields
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('a', '<', 5),
+        filter('aa', '>', 5),
+        filter('a.a', '>', 5)
+      ),
+      orderBy('a'),
+      orderBy('a.a'),
+      orderBy('aa'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
 
-    query1 = queryWithLimit(query('foo'), 1, LimitType.First);
-    expect(matchesAllDocuments(query1)).to.be.false;
+    // special characters
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('a', '<', 5),
+        filter('_a', '>', 5),
+        filter('a.a', '>', 5)
+      ),
+      orderBy('_a'),
+      orderBy('a'),
+      orderBy('a.a'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
 
-    query1 = queryWithStartAt(baseQuery, bound([], true));
-    expect(matchesAllDocuments(query1)).to.be.false;
+    // field name with dot
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('a', '<', 5),
+        filter('a.z', '>', 5), // nested field
+        filter('`a.a`', '>', 5) // field name with dot
+      ),
+      orderBy('a'),
+      orderBy('a.z'),
+      orderBy('`a.a`'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
 
-    query1 = queryWithEndAt(baseQuery, bound([], true));
-    expect(matchesAllDocuments(query1)).to.be.false;
+    // composite filter
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('a', '<', 5),
+        andFilter(
+          orFilter(filter('b', '>=', 1), filter('c', '<=', 1)),
+          orFilter(filter('d', '>', 1), filter('e', '==', 1))
+        )
+      ),
+      orderBy('a'),
+      orderBy('b'),
+      orderBy('c'),
+      orderBy('d'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
+
+    // OrderBy
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('b', '<', 5),
+        filter('a', '>', 5),
+        filter('z', '>', 5),
+        orderBy('z')
+      ),
+      orderBy('z'),
+      orderBy('a'),
+      orderBy('b'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
+
+    // last explicit order by direction
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('b', '<', 5),
+        filter('a', '>', 5),
+        orderBy('z', 'desc')
+      ),
+      orderBy('z', 'desc'),
+      orderBy('a', 'desc'),
+      orderBy('b', 'desc'),
+      orderBy(DOCUMENT_KEY_NAME, 'desc')
+    );
+
+    assertImplicitOrderBy(
+      query(
+        'foo',
+        filter('b', '<', 5),
+        filter('a', '>', 5),
+        orderBy('z', 'desc'),
+        orderBy('c')
+      ),
+      orderBy('z', 'desc'),
+      orderBy('c'),
+      orderBy('a'),
+      orderBy('b'),
+      orderBy(DOCUMENT_KEY_NAME)
+    );
   });
 
+  it('matchesAllDocuments() considers filters, orders and bounds', () => {
+    const baseQuery = newQueryForPath(ResourcePath.fromString('collection'));
+    expect(queryMatchesAllDocuments(baseQuery)).to.be.true;
+
+    let query1 = query('collection', orderBy('__name__'));
+    expect(queryMatchesAllDocuments(query1)).to.be.true;
+
+    query1 = query('collection', orderBy('foo'));
+    expect(queryMatchesAllDocuments(query1)).to.be.false;
+
+    query1 = query('collection', filter('foo', '==', 'bar'));
+    expect(queryMatchesAllDocuments(query1)).to.be.false;
+
+    query1 = queryWithLimit(query('foo'), 1, LimitType.First);
+    expect(queryMatchesAllDocuments(query1)).to.be.false;
+
+    query1 = queryWithStartAt(baseQuery, bound([], true));
+    expect(queryMatchesAllDocuments(query1)).to.be.false;
+
+    query1 = queryWithEndAt(baseQuery, bound([], false));
+    expect(queryMatchesAllDocuments(query1)).to.be.false;
+  });
+
+  it('matches composite queries', () => {
+    const doc1 = doc('collection/1', 0, { a: 1, b: 0 });
+    const doc2 = doc('collection/2', 0, { a: 2, b: 1 });
+    const doc3 = doc('collection/3', 0, { a: 3, b: 2 });
+    const doc4 = doc('collection/4', 0, { a: 1, b: 3 });
+    const doc5 = doc('collection/5', 0, { a: 1, b: 1 });
+
+    // Two equalities: a==1 || b==1.
+    const query1 = query(
+      'collection',
+      orFilter(filter('a', '==', 1), filter('b', '==', 1))
+    );
+    assertQueryMatches(query1, [doc1, doc2, doc4, doc5], [doc3]);
+
+    // with one inequality: a>2 || b==1.
+    const query2 = query(
+      'collection',
+      orFilter(filter('a', '>', 2), filter('b', '==', 1))
+    );
+    assertQueryMatches(query2, [doc2, doc3, doc5], [doc1, doc4]);
+
+    // (a==1 && b==0) || (a==3 && b==2)
+    const query3 = query(
+      'collection',
+      orFilter(
+        andFilter(filter('a', '==', 1), filter('b', '==', 0)),
+        andFilter(filter('a', '==', 3), filter('b', '==', 2))
+      )
+    );
+    assertQueryMatches(query3, [doc1, doc3], [doc2, doc4, doc5]);
+
+    // a==1 && (b==0 || b==3).
+    const query4 = query(
+      'collection',
+      andFilter(
+        filter('a', '==', 1),
+        orFilter(filter('b', '==', 0), filter('b', '==', 3))
+      )
+    );
+    assertQueryMatches(query4, [doc1, doc4], [doc2, doc3, doc5]);
+
+    // (a==2 || b==2) && (a==3 || b==3)
+    const query5 = query(
+      'collection',
+      andFilter(
+        orFilter(filter('a', '==', 2), filter('b', '==', 2)),
+        orFilter(filter('a', '==', 3), filter('b', '==', 3))
+      )
+    );
+    assertQueryMatches(query5, [doc3], [doc1, doc2, doc4, doc5]);
+  });
+
+  it('matches composite queries with multiple inequality', () => {
+    const doc1 = doc('collection/1', 0, { a: 1, b: 0 });
+    const doc2 = doc('collection/2', 0, { a: 2, b: 1 });
+    const doc3 = doc('collection/3', 0, { a: 3, b: 2 });
+    const doc4 = doc('collection/4', 0, { a: 1, b: 3 });
+    const doc5 = doc('collection/5', 0, { a: 1, b: 1 });
+
+    // a>1 || b!=1.
+    const query1 = query(
+      'collection',
+      orFilter(filter('a', '>', 1), filter('b', '!=', 1))
+    );
+    assertQueryMatches(query1, [doc1, doc2, doc3, doc4], [doc5]);
+
+    // (a>=1 && b==0) || (a==1 && b!=1)
+    const query2 = query(
+      'collection',
+      orFilter(
+        andFilter(filter('a', '>=', 1), filter('b', '==', 0)),
+        andFilter(filter('a', '==', 1), filter('b', '!=', 1))
+      )
+    );
+    assertQueryMatches(query2, [doc1, doc4], [doc2, doc3, doc5]);
+
+    // a<=2 && (a!=1 || b<3).
+    const query3 = query(
+      'collection',
+      andFilter(
+        filter('a', '<=', 2),
+        orFilter(filter('a', '!=', 1), filter('b', '<', 3))
+      )
+    );
+    assertQueryMatches(query3, [doc1, doc2, doc5], [doc3, doc4]);
+  });
+
+  it('generates appropriate order-bys for aggregate and non-aggregate targets', () => {
+    const col = newQueryForPath(ResourcePath.fromString('collection'));
+
+    // Build two identical queries
+    const query1 = queryWithAddedFilter(col, filter('foo', '>', 1));
+    const query2 = queryWithAddedFilter(col, filter('foo', '>', 1));
+
+    // Compute an aggregate and non-aggregate target from the queries
+    const aggregateTarget = queryToAggregateTarget(query1);
+    const target = queryToTarget(query2);
+
+    expect(aggregateTarget.orderBy.length).to.equal(0);
+    expect(target.orderBy.length).to.equal(2);
+    expect(target.orderBy[0].dir).to.equal('asc');
+    expect(target.orderBy[0].field.canonicalString()).to.equal('foo');
+    expect(target.orderBy[1].dir).to.equal('asc');
+    expect(target.orderBy[1].field.canonicalString()).to.equal('__name__');
+  });
+
+  it('generated order-bys are not affected by previously memoized targets', () => {
+    const col = newQueryForPath(ResourcePath.fromString('collection'));
+
+    // Build two identical queries
+    const query1 = queryWithAddedFilter(col, filter('foo', '>', 1));
+    const query2 = queryWithAddedFilter(col, filter('foo', '>', 1));
+
+    // query1 - first to aggregate target, then to non-aggregate target
+    const aggregateTarget1 = queryToAggregateTarget(query1);
+    const target1 = queryToTarget(query1);
+
+    // query2 - first to non-aggregate target, then to aggregate target
+    const target2 = queryToTarget(query2);
+    const aggregateTarget2 = queryToAggregateTarget(query2);
+
+    expect(aggregateTarget1.orderBy.length).to.equal(0);
+
+    expect(aggregateTarget2.orderBy.length).to.equal(0);
+
+    expect(target1.orderBy.length).to.equal(2);
+    expect(target1.orderBy[0].dir).to.equal('asc');
+    expect(target1.orderBy[0].field.canonicalString()).to.equal('foo');
+    expect(target1.orderBy[1].dir).to.equal('asc');
+    expect(target1.orderBy[1].field.canonicalString()).to.equal('__name__');
+
+    expect(target2.orderBy.length).to.equal(2);
+    expect(target2.orderBy[0].dir).to.equal('asc');
+    expect(target2.orderBy[0].field.canonicalString()).to.equal('foo');
+    expect(target2.orderBy[1].dir).to.equal('asc');
+    expect(target2.orderBy[1].field.canonicalString()).to.equal('__name__');
+  });
+
+  function assertQueryMatches(
+    query: Query,
+    matching: MutableDocument[],
+    nonMatching: MutableDocument[]
+  ): void {
+    for (const doc of matching) {
+      expect(queryMatches(query, doc)).to.be.true;
+    }
+    for (const doc of nonMatching) {
+      expect(queryMatches(query, doc)).to.be.false;
+    }
+  }
+
   function assertImplicitOrderBy(query: Query, ...orderBys: OrderBy[]): void {
-    expect(queryOrderBy(query)).to.deep.equal(orderBys);
+    expect(queryNormalizedOrderBy(query)).to.deep.equal(orderBys);
   }
 
   function assertCanonicalId(query: Query, expectedCanonicalId: string): void {

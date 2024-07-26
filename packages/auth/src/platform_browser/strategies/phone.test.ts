@@ -16,9 +16,9 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 
 import { OperationType, ProviderId } from '../../model/enums';
 import { FirebaseError } from '@firebase/util';
@@ -60,7 +60,7 @@ describe('platform_browser/strategies/phone', () => {
       sessionInfo: 'session-info'
     });
 
-    verifier = new RecaptchaVerifier(document.createElement('div'), {}, auth);
+    verifier = new RecaptchaVerifier(auth, document.createElement('div'), {});
     sinon.stub(verifier, 'verify').returns(Promise.resolve('recaptcha-token'));
   });
 
@@ -323,7 +323,7 @@ describe('platform_browser/strategies/phone', () => {
       });
 
       it('works with an enrollment flow', async () => {
-        const endpoint = mockEndpoint(Endpoint.START_PHONE_MFA_ENROLLMENT, {
+        const endpoint = mockEndpoint(Endpoint.START_MFA_ENROLLMENT, {
           phoneSessionInfo: {
             sessionInfo: 'session-info'
           }
@@ -345,7 +345,7 @@ describe('platform_browser/strategies/phone', () => {
       });
 
       it('works when completing the sign in flow', async () => {
-        const endpoint = mockEndpoint(Endpoint.START_PHONE_MFA_SIGN_IN, {
+        const endpoint = mockEndpoint(Endpoint.START_MFA_SIGN_IN, {
           phoneResponseInfo: {
             sessionInfo: 'session-info'
           }
@@ -394,7 +394,7 @@ describe('platform_browser/strategies/phone', () => {
       ).to.be.rejectedWith(FirebaseError, 'auth/argument-error');
     });
 
-    it('resets the verifer after successful verification', async () => {
+    it('resets the verifier after successful verification', async () => {
       sinon.spy(verifier, '_reset');
       expect(await _verifyPhoneNumber(auth, 'number', verifier)).to.eq(
         'session-info'
@@ -402,7 +402,7 @@ describe('platform_browser/strategies/phone', () => {
       expect(verifier._reset).to.have.been.called;
     });
 
-    it('resets the verifer after a failed verification', async () => {
+    it('resets the verifier after a failed verification', async () => {
       sinon.spy(verifier, '_reset');
       (verifier.verify as sinon.SinonStub).returns(Promise.resolve(123));
 

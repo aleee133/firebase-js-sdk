@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// eslint-disable-next-line import/no-extraneous-dependencies
 import { _getProvider, FirebaseApp, getApp } from '@firebase/app';
 
 import {
@@ -47,13 +46,20 @@ import {
   getDownloadURL as getDownloadURLInternal,
   deleteObject as deleteObjectInternal,
   Reference,
-  _getChild as _getChildInternal
+  _getChild as _getChildInternal,
+  getBytesInternal
 } from './reference';
 import { STORAGE_TYPE } from './constants';
-import { EmulatorMockTokenOptions, getModularInstance } from '@firebase/util';
+import {
+  EmulatorMockTokenOptions,
+  getModularInstance,
+  getDefaultEmulatorHostnameAndPort
+} from '@firebase/util';
 import { StringFormat } from './implementation/string';
 
 export { EmulatorMockTokenOptions } from '@firebase/util';
+
+export { StorageError, StorageErrorCode } from './implementation/error';
 
 /**
  * Public types.
@@ -74,6 +80,29 @@ export {
   TaskEvent as _TaskEvent,
   TaskState as _TaskState
 } from './implementation/taskenums';
+export { StringFormat };
+
+/**
+ * Downloads the data at the object's location. Returns an error if the object
+ * is not found.
+ *
+ * To use this functionality, you have to whitelist your app's origin in your
+ * Cloud Storage bucket. See also
+ * https://cloud.google.com/storage/docs/configuring-cors
+ *
+ * @public
+ * @param ref - StorageReference where data should be downloaded.
+ * @param maxDownloadSizeBytes - If set, the maximum allowed size in bytes to
+ * retrieve.
+ * @returns A Promise containing the object's bytes
+ */
+export function getBytes(
+  ref: StorageReference,
+  maxDownloadSizeBytes?: number
+): Promise<ArrayBuffer> {
+  ref = getModularInstance(ref);
+  return getBytesInternal(ref as Reference, maxDownloadSizeBytes);
+}
 
 /**
  * Uploads data to this object's location.
@@ -146,7 +175,7 @@ export function uploadBytesResumable(
 
 /**
  * A `Promise` that resolves with the metadata for this object. If this
- * object doesn't exist or metadata cannot be retreived, the promise is
+ * object doesn't exist or metadata cannot be retrieved, the promise is
  * rejected.
  * @public
  * @param ref - {@link StorageReference} to get metadata from.
@@ -290,8 +319,6 @@ export function _getChild(ref: StorageReference, childPath: string): Reference {
   return _getChildInternal(ref as Reference, childPath);
 }
 
-export { StringFormat } from './implementation/string';
-
 /**
  * Gets a {@link FirebaseStorage} instance for the given Firebase app.
  * @public
@@ -309,6 +336,10 @@ export function getStorage(
   const storageInstance = storageProvider.getImmediate({
     identifier: bucketUrl
   });
+  const emulator = getDefaultEmulatorHostnameAndPort('storage');
+  if (emulator) {
+    connectStorageEmulator(storageInstance, ...emulator);
+  }
   return storageInstance;
 }
 

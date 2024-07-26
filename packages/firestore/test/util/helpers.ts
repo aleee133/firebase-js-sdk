@@ -15,14 +15,20 @@
  * limitations under the License.
  */
 
-import * as firestore from '@firebase/firestore-types';
 import { expect } from 'chai';
 
-import { Blob } from '../../compat/api/blob';
-import { DocumentReference } from '../../compat/api/database';
-import { Timestamp } from '../../src/api/timestamp';
+import { Bytes, DocumentReference, Timestamp } from '../../src';
+import { Bound } from '../../src/core/bound';
 import { BundledDocuments } from '../../src/core/bundle';
 import { DatabaseId } from '../../src/core/database_info';
+import {
+  FieldFilter,
+  CompositeFilter,
+  Filter,
+  Operator,
+  CompositeOperator
+} from '../../src/core/filter';
+import { Direction, OrderBy } from '../../src/core/order_by';
 import {
   newQueryForPath,
   Query,
@@ -31,14 +37,6 @@ import {
   queryWithAddedOrderBy
 } from '../../src/core/query';
 import { SnapshotVersion } from '../../src/core/snapshot_version';
-import {
-  Bound,
-  Direction,
-  FieldFilter,
-  Filter,
-  Operator,
-  OrderBy
-} from '../../src/core/target';
 import { TargetId } from '../../src/core/types';
 import {
   AddedLimboDocument,
@@ -70,14 +68,24 @@ import {
 import { DocumentComparator } from '../../src/model/document_comparator';
 import { DocumentKey } from '../../src/model/document_key';
 import { DocumentSet } from '../../src/model/document_set';
+import {
+  FieldIndex,
+  IndexKind,
+  IndexOffset,
+  IndexSegment,
+  IndexState,
+  INITIAL_SEQUENCE_NUMBER
+} from '../../src/model/field_index';
 import { FieldMask } from '../../src/model/field_mask';
 import {
   DeleteMutation,
   MutationResult,
   PatchMutation,
   Precondition,
-  SetMutation
+  SetMutation,
+  FieldTransform
 } from '../../src/model/mutation';
+import { normalizeByteString } from '../../src/model/normalize';
 import { JsonObject, ObjectValue } from '../../src/model/object_value';
 import { FieldPath, ResourcePath } from '../../src/model/path';
 import { decodeBase64, encodeBase64 } from '../../src/platform/base64';
@@ -87,6 +95,8 @@ import {
   LimitType as ProtoLimitType
 } from '../../src/protos/firestore_bundle_proto';
 import * as api from '../../src/protos/firestore_proto_api';
+import { BloomFilter } from '../../src/remote/bloom_filter';
+import { ExistenceFilter } from '../../src/remote/existence_filter';
 import { RemoteEvent, TargetChange } from '../../src/remote/remote_event';
 import {
   JsonProtoSerializer,
@@ -98,6 +108,7 @@ import {
 } from '../../src/remote/serializer';
 import {
   DocumentWatchChange,
+  ExistenceFilterChange,
   WatchChangeAggregator,
   WatchTargetChange,
   WatchTargetChangeState
@@ -137,32 +148,36 @@ export function version(v: TestSnapshotVersion): SnapshotVersion {
 }
 
 export function ref(key: string, offset?: number): DocumentReference {
-  return DocumentReference.forPath(
-    path(key, offset),
+  return new DocumentReference(
     FIRESTORE,
-    /* converter= */ null
+    /* converter= */ null,
+    new DocumentKey(path(key, offset))
   );
 }
 
 export function doc(
   keyStr: string,
   ver: TestSnapshotVersion,
-  jsonOrObjectValue: JsonObject<unknown> | ObjectValue
+  jsonOrObjectValue: JsonObject<unknown> | ObjectValue,
+  createTime?: TestSnapshotVersion
 ): MutableDocument {
   return MutableDocument.newFoundDocument(
     key(keyStr),
     version(ver),
+    createTime ? version(createTime) : SnapshotVersion.min(),
     jsonOrObjectValue instanceof ObjectValue
       ? jsonOrObjectValue
       : wrapObject(jsonOrObjectValue)
-  );
+  ).setReadTime(version(ver));
 }
 
 export function deletedDoc(
   keyStr: string,
   ver: TestSnapshotVersion
 ): MutableDocument {
-  return MutableDocument.newNoDocument(key(keyStr), version(ver));
+  return MutableDocument.newNoDocument(key(keyStr), version(ver)).setReadTime(
+    version(ver)
+  );
 }
 
 export function unknownDoc(
@@ -212,22 +227,52 @@ export function path(path: string, offset?: number): ResourcePath {
 }
 
 export function field(path: string): FieldPath {
-  return new FieldPath(path.split('.'));
+  return FieldPath.fromServerFormat(path);
+}
+
+export function fieldIndex(
+  collectionGroup: string,
+  options: {
+    id?: number;
+    fields?: Array<[field: string, kind: IndexKind]>;
+    offset?: IndexOffset;
+    sequenceNumber?: number;
+  } = {}
+): FieldIndex {
+  return new FieldIndex(
+    options.id ?? FieldIndex.UNKNOWN_ID,
+    collectionGroup,
+    (options.fields ?? []).map(
+      entry => new IndexSegment(field(entry[0]), entry[1])
+    ),
+    new IndexState(
+      options.sequenceNumber ?? INITIAL_SEQUENCE_NUMBER,
+      options.offset ?? IndexOffset.min()
+    )
+  );
 }
 
 export function mask(...paths: string[]): FieldMask {
   return new FieldMask(paths.map(v => field(v)));
 }
 
-export function blob(...bytes: number[]): Blob {
+export function blob(...bytes: number[]): Bytes {
   // bytes can be undefined for the empty blob
-  return Blob.fromUint8Array(new Uint8Array(bytes || []));
+  return Bytes.fromUint8Array(new Uint8Array(bytes || []));
 }
 
 export function filter(path: string, op: string, value: unknown): FieldFilter {
   const dataValue = wrap(value);
   const operator = op as Operator;
   return FieldFilter.create(field(path), operator, dataValue);
+}
+
+export function andFilter(...filters: Filter[]): CompositeFilter {
+  return CompositeFilter.create(filters, CompositeOperator.AND);
+}
+
+export function orFilter(...filters: Filter[]): CompositeFilter {
+  return CompositeFilter.create(filters, CompositeOperator.OR);
 }
 
 export function setMutation(
@@ -258,6 +303,23 @@ export function patchMutation(
   if (precondition === undefined) {
     precondition = Precondition.exists(true);
   }
+  return patchMutationHelper(keyStr, json, precondition, /* updateMask */ null);
+}
+
+export function mergeMutation(
+  keyStr: string,
+  json: JsonObject<unknown>,
+  updateMask: FieldPath[]
+): PatchMutation {
+  return patchMutationHelper(keyStr, json, Precondition.none(), updateMask);
+}
+
+function patchMutationHelper(
+  keyStr: string,
+  json: JsonObject<unknown>,
+  precondition: Precondition,
+  updateMask: FieldPath[] | null
+): PatchMutation {
   // Replace '<DELETE>' from JSON with FieldValue
   forEach(json, (k, v) => {
     if (v === '<DELETE>') {
@@ -271,12 +333,31 @@ export function patchMutation(
     patchKey,
     json
   );
+
+  // `mergeMutation()` provides an update mask for the merged fields, whereas
+  // `patchMutation()` requires the update mask to be parsed from the values.
+  const mask = updateMask ? updateMask : parsed.fieldMask.fields;
+
+  // We sort the fieldMaskPaths to make the order deterministic in tests.
+  // (Otherwise, when we flatten a Set to a proto repeated field, we'll end up
+  // comparing in iterator order and possibly consider {foo,bar} != {bar,foo}.)
+  let fieldMaskPaths = new SortedSet<FieldPath>(FieldPath.comparator);
+  mask.forEach(value => (fieldMaskPaths = fieldMaskPaths.add(value)));
+
+  // The order of the transforms doesn't matter, but we sort them so tests can
+  // assume a particular order.
+  const fieldTransforms: FieldTransform[] = [];
+  fieldTransforms.push(...parsed.fieldTransforms);
+  fieldTransforms.sort((lhs, rhs) =>
+    FieldPath.comparator(lhs.field, rhs.field)
+  );
+
   return new PatchMutation(
     patchKey,
     parsed.data,
-    parsed.fieldMask,
+    new FieldMask(fieldMaskPaths.toArray()),
     precondition,
-    parsed.fieldTransforms
+    fieldTransforms
   );
 }
 
@@ -290,16 +371,12 @@ export function mutationResult(
   return new MutationResult(version(testVersion), /* transformResults= */ []);
 }
 
-export function bound(
-  values: Array<[string, {}, firestore.OrderByDirection]>,
-  before: boolean
-): Bound {
+export function bound(values: unknown[], inclusive: boolean): Bound {
   const components: api.Value[] = [];
   for (const value of values) {
-    const [_, dataValue] = value;
-    components.push(wrap(dataValue));
+    components.push(wrap(value));
   }
-  return new Bound(components, before);
+  return new Bound(components, inclusive);
 }
 
 export function query(
@@ -340,13 +417,36 @@ export function noChangeEvent(
   const aggregator = new WatchChangeAggregator({
     getRemoteKeysForTarget: () => documentKeySet(),
     getTargetDataForTarget: targetId =>
-      targetData(targetId, TargetPurpose.Listen, 'foo')
+      targetData(targetId, TargetPurpose.Listen, 'foo'),
+    getDatabaseId: () => TEST_DATABASE_ID
   });
   aggregator.handleTargetChange(
     new WatchTargetChange(
       WatchTargetChangeState.NoChange,
       [targetId],
       resumeToken
+    )
+  );
+  return aggregator.createRemoteEvent(version(snapshotVersion));
+}
+
+export function existenceFilterEvent(
+  targetId: number,
+  syncedKeys: DocumentKeySet,
+  remoteCount: number,
+  snapshotVersion: number,
+  bloomFilter?: api.BloomFilter
+): RemoteEvent {
+  const aggregator = new WatchChangeAggregator({
+    getRemoteKeysForTarget: () => syncedKeys,
+    getTargetDataForTarget: targetId =>
+      targetData(targetId, TargetPurpose.Listen, 'foo'),
+    getDatabaseId: () => TEST_DATABASE_ID
+  });
+  aggregator.handleExistenceFilter(
+    new ExistenceFilterChange(
+      targetId,
+      new ExistenceFilter(remoteCount, bloomFilter)
     )
   );
   return aggregator.createRemoteEvent(version(snapshotVersion));
@@ -378,7 +478,8 @@ export function docAddedRemoteEvent(
       } else {
         return null;
       }
-    }
+    },
+    getDatabaseId: () => TEST_DATABASE_ID
   });
 
   let version = SnapshotVersion.min();
@@ -425,7 +526,8 @@ export function docUpdateRemoteEvent(
           ? TargetPurpose.LimboResolution
           : TargetPurpose.Listen;
       return targetData(targetId, purpose, doc.key.toString());
-    }
+    },
+    getDatabaseId: () => TEST_DATABASE_ID
   });
   aggregator.handleDocumentChange(docChange);
   return aggregator.createRemoteEvent(doc.version);
@@ -474,10 +576,11 @@ export function namedQuery(
       name,
       readTime: toTimestamp(JSON_SERIALIZER, readTime.toTimestamp()),
       bundledQuery: {
-        parent: toQueryTarget(JSON_SERIALIZER, queryToTarget(query)).parent,
+        parent: toQueryTarget(JSON_SERIALIZER, queryToTarget(query)).queryTarget
+          .parent,
         limitType,
         structuredQuery: toQueryTarget(JSON_SERIALIZER, queryToTarget(query))
-          .structuredQuery
+          .queryTarget.structuredQuery
       }
     },
     matchingDocuments
@@ -929,4 +1032,92 @@ export function forEachNumber<V>(
       }
     }
   }
+}
+
+/**
+ * Returns all possible permutations of the given array.
+ * For `[a, b]`, this method returns `[[a, b], [b, a]]`.
+ */
+export function computePermutations<T>(input: T[]): T[][] {
+  if (input.length === 0) {
+    return [[]];
+  }
+
+  const result: T[][] = [];
+  for (let i = 0; i < input.length; ++i) {
+    const rest = computePermutations(
+      input.slice(0, i).concat(input.slice(i + 1))
+    );
+
+    if (rest.length === 0) {
+      result.push([input[i]]);
+    } else {
+      for (let j = 0; j < rest.length; ++j) {
+        result.push([input[i]].concat(rest[j]));
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Returns all possible combinations of the given array, including an empty
+ * array. For `[a, b, c]` this method returns
+ * `[[], [a], [a, b], [a, c], [b, c], [a, b, c]`.
+ */
+export function computeCombinations<T>(input: T[]): T[][] {
+  const computeNonEmptyCombinations = (input: T[]): T[][] => {
+    if (input.length === 1) {
+      return [input];
+    } else {
+      const first = input[0];
+      const rest = computeNonEmptyCombinations(input.slice(1));
+      return rest.concat(
+        rest.map(e => e.concat(first)),
+        [[first]]
+      );
+    }
+  };
+  return computeNonEmptyCombinations(input).concat([[]]);
+}
+
+/**
+ * Helper method to generate bloom filter proto value for mocking watch
+ * existence filter response.
+ */
+export function generateBloomFilterProto(config: {
+  contains: MutableDocument[];
+  notContains: MutableDocument[];
+  hashCount?: number;
+  bitCount?: number;
+}): api.BloomFilter {
+  const DOCUMENT_PREFIX =
+    'projects/test-project/databases/(default)/documents/';
+
+  const { contains, notContains, hashCount = 10, bitCount = 100 } = config;
+
+  if (bitCount === 0 && contains.length !== 0) {
+    throw new Error('To contain strings, number of bits cannot be 0.');
+  }
+  const bloomFilter = BloomFilter.create(
+    bitCount,
+    hashCount,
+    contains.map(item => DOCUMENT_PREFIX + item.key)
+  );
+
+  notContains.forEach(item => {
+    if (bloomFilter.mightContain(DOCUMENT_PREFIX + item.key)) {
+      throw new Error(
+        'Cannot generate desired bloom filter. Please adjust the hashCount ' +
+          'and/or number of bits.'
+      );
+    }
+  });
+  return {
+    bits: {
+      bitmap: normalizeByteString(bloomFilter.bitmap).toBase64(),
+      padding: bloomFilter.padding
+    },
+    hashCount: bloomFilter.hashCount
+  };
 }

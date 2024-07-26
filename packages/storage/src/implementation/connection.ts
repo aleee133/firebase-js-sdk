@@ -15,18 +15,31 @@
  * limitations under the License.
  */
 
-/**
- * Network headers
- */
-export interface Headers {
-  [name: string]: string;
-}
+/** Network headers */
+export type Headers = Record<string, string>;
+
+/** Response type exposed by the networking APIs. */
+export type ConnectionType =
+  | string
+  | ArrayBuffer
+  | Blob
+  | NodeJS.ReadableStream;
 
 /**
  * A lightweight wrapper around XMLHttpRequest with a
  * goog.net.XhrIo-like interface.
+ *
+ * You can create a new connection by invoking `newTextConnection()`,
+ * `newBytesConnection()` or `newStreamConnection()`.
  */
-export interface Connection {
+export interface Connection<T extends ConnectionType> {
+  /**
+   * Sends a request to the provided URL.
+   *
+   * This method never rejects its promise. In case of encountering an error,
+   * it sets an error code internally which can be accessed by calling
+   * getErrorCode() by callers.
+   */
   send(
     url: string,
     method: string,
@@ -38,7 +51,9 @@ export interface Connection {
 
   getStatus(): number;
 
-  getResponseText(): string;
+  getResponse(): T;
+
+  getErrorText(): string;
 
   /**
    * Abort the request.
@@ -53,7 +68,7 @@ export interface Connection {
 }
 
 /**
- * Error codes for requests made by the the XhrIo wrapper.
+ * Error codes for requests made by the XhrIo wrapper.
  */
 export enum ErrorCode {
   NO_ERROR = 0,

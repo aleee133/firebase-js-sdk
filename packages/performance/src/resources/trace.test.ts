@@ -38,11 +38,11 @@ describe('Firebase Performance > trace', () => {
     appId: '1:111:web:a1234'
   };
 
-  const fakeFirebaseApp = ({
+  const fakeFirebaseApp = {
     options: fakeFirebaseConfig
-  } as unknown) as FirebaseApp;
+  } as unknown as FirebaseApp;
 
-  const fakeInstallations = ({} as unknown) as FirebaseInstallations;
+  const fakeInstallations = {} as unknown as FirebaseInstallations;
   const performanceController = new PerformanceController(
     fakeFirebaseApp,
     fakeInstallations
@@ -134,6 +134,15 @@ describe('Firebase Performance > trace', () => {
       expect(trace.getAttributes()).to.eql({ level: '1' });
       expect(trace.getMetric('cacheHits')).to.eql(1);
     });
+
+    it('does not log counter with invalid counter value', () => {
+      trace.record(1, 20, {
+        metrics: { level: NaN }
+      });
+
+      expect((perfLogger.logTrace as any).calledOnceWith(trace)).to.be.true;
+      expect(trace.getMetric('level')).to.eql(0);
+    });
   });
 
   describe('#incrementMetric', () => {
@@ -187,6 +196,13 @@ describe('Firebase Performance > trace', () => {
       trace.putMetric('cacheHits', 400);
 
       expect(trace.getMetric('cacheHits')).to.eql(400);
+    });
+
+    it('replaces undefined metrics with 0', () => {
+      // @ts-ignore A non-TS user could provide undefined.
+      trace.putMetric('cacheHits', undefined);
+
+      expect(trace.getMetric('cacheHits')).to.eql(0);
     });
 
     it('throws error if metric doesnt exist and has invalid name', () => {

@@ -24,6 +24,12 @@ export interface Indexable {
   [k: string]: unknown;
 }
 
+/**
+ * A utility class for generating unique alphanumeric IDs of a specified length.
+ *
+ * @internal
+ * Exported internally for testing purposes.
+ */
 export class AutoId {
   static newId(): string {
     // Alphanumeric characters
@@ -66,6 +72,10 @@ export function primitiveComparator<T>(left: T, right: T): number {
 
 export interface Equatable<T> {
   isEqual(other: T): boolean;
+}
+
+export interface Iterable<V> {
+  forEach: (cb: (v: V) => void) => void;
 }
 
 /** Helper to compare arrays using isEqual(). */

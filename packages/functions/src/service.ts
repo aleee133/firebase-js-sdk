@@ -53,18 +53,34 @@ export interface HttpResponseBody {
   };
 }
 
+interface CancellablePromise<T> {
+  promise: Promise<T>;
+  cancel: () => void;
+}
+
 /**
  * Returns a Promise that will be rejected after the given duration.
  * The error will be of type FunctionsError.
  *
  * @param millis Number of milliseconds to wait before rejecting.
  */
-function failAfter(millis: number): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => {
-      reject(new FunctionsError('deadline-exceeded', 'deadline-exceeded'));
-    }, millis);
-  });
+function failAfter(millis: number): CancellablePromise<never> {
+  // Node timers and browser timers are fundamentally incompatible, but we
+  // don't care about the value here
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let timer: any | null = null;
+  return {
+    promise: new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new FunctionsError('deadline-exceeded', 'deadline-exceeded'));
+      }, millis);
+    }),
+    cancel: () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  };
 }
 
 /**
@@ -171,6 +187,21 @@ export function httpsCallable<RequestData, ResponseData>(
 }
 
 /**
+ * Returns a reference to the callable https trigger with the given url.
+ * @param url - The url of the trigger.
+ * @public
+ */
+export function httpsCallableFromURL<RequestData, ResponseData>(
+  functionsInstance: FunctionsService,
+  url: string,
+  options?: HttpsCallableOptions
+): HttpsCallable<RequestData, ResponseData> {
+  return (data => {
+    return callAtURL(functionsInstance, url, data, options || {});
+  }) as HttpsCallable<RequestData, ResponseData>;
+}
+
+/**
  * Does an HTTP POST and returns the completed response.
  * @param url The url to post to.
  * @param body The JSON body of the post.
@@ -219,21 +250,36 @@ async function postJSON(
  * @param name The name of the callable trigger.
  * @param data The data to pass as params to the function.s
  */
-async function call(
+function call(
   functionsInstance: FunctionsService,
   name: string,
   data: unknown,
   options: HttpsCallableOptions
 ): Promise<HttpsCallableResult> {
   const url = functionsInstance._url(name);
+  return callAtURL(functionsInstance, url, data, options);
+}
 
+/**
+ * Calls a callable function asynchronously and returns the result.
+ * @param url The url of the callable trigger.
+ * @param data The data to pass as params to the function.s
+ */
+async function callAtURL(
+  functionsInstance: FunctionsService,
+  url: string,
+  data: unknown,
+  options: HttpsCallableOptions
+): Promise<HttpsCallableResult> {
   // Encode any special types, such as dates, in the input data.
   data = encode(data);
   const body = { data };
 
   // Add a header for the authToken.
   const headers: { [key: string]: string } = {};
-  const context = await functionsInstance.contextProvider.getContext();
+  const context = await functionsInstance.contextProvider.getContext(
+    options.limitedUseAppCheckTokens
+  );
   if (context.authToken) {
     headers['Authorization'] = 'Bearer ' + context.authToken;
   }
@@ -247,11 +293,15 @@ async function call(
   // Default timeout to 70s, but let the options override it.
   const timeout = options.timeout || 70000;
 
+  const failAfterHandle = failAfter(timeout);
   const response = await Promise.race([
     postJSON(url, body, headers, functionsInstance.fetchImpl),
-    failAfter(timeout),
+    failAfterHandle.promise,
     functionsInstance.cancelAllRequests
   ]);
+
+  // Always clear the failAfter timeout
+  failAfterHandle.cancel();
 
   // If service was deleted, interrupted response throws an error.
   if (!response) {

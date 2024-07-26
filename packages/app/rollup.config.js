@@ -16,15 +16,18 @@
  */
 
 import typescriptPlugin from 'rollup-plugin-typescript2';
+import replace from 'rollup-plugin-replace';
 import typescript from 'typescript';
 import json from '@rollup/plugin-json';
+import dts from 'rollup-plugin-dts';
+import { generateBuildTargetReplaceConfig } from '../../scripts/build/rollup_replace_build_target';
+import { emitModulePackageFile } from '../../scripts/build/rollup_emit_module_package_file';
 import pkg from './package.json';
 
-const deps = Object.keys(Object.assign({}, pkg.peerDependencies, pkg.dependencies));
+const deps = Object.keys(
+  Object.assign({}, pkg.peerDependencies, pkg.dependencies)
+);
 
-/**
- * ES5 Builds
- */
 const es5BuildPlugins = [
   typescriptPlugin({
     typescript
@@ -32,30 +35,6 @@ const es5BuildPlugins = [
   json()
 ];
 
-const es5Builds = [
-  /**
-   * Browser Builds
-   */
-  {
-    input: 'src/index.ts',
-    output: [{ file: pkg.esm5, format: 'es', sourcemap: true }],
-    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
-    plugins: es5BuildPlugins
-  },
-  /**
-   * Node.js Build
-   */
-  {
-    input: 'src/index.ts',
-    output: [{ file: pkg.main, format: 'cjs', sourcemap: true }],
-    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
-    plugins: es5BuildPlugins
-  }
-];
-
-/**
- * ES2017 Builds
- */
 const es2017BuildPlugins = [
   typescriptPlugin({
     typescript,
@@ -70,10 +49,23 @@ const es2017BuildPlugins = [
   })
 ];
 
-const es2017Builds = [
+const esmBuilds = [
   /**
-   *  Browser Builds
+   * Browser Builds
    */
+  {
+    input: 'src/index.ts',
+    output: [{ file: pkg.esm5, format: 'es', sourcemap: true }],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
+    plugins: [
+      ...es5BuildPlugins,
+      replace({
+        ...generateBuildTargetReplaceConfig('esm', 5),
+        '__RUNTIME_ENV__': ''
+      }),
+      emitModulePackageFile()
+    ]
+  },
   {
     input: 'src/index.ts',
     output: {
@@ -82,8 +74,42 @@ const es2017Builds = [
       sourcemap: true
     },
     external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
-    plugins: es2017BuildPlugins
+    plugins: [
+      ...es2017BuildPlugins,
+      replace({
+        ...generateBuildTargetReplaceConfig('esm', 2017),
+        '__RUNTIME_ENV__': ''
+      }),
+      emitModulePackageFile()
+    ]
   }
 ];
 
-export default [...es5Builds, ...es2017Builds];
+const cjsBuilds = [
+  {
+    input: 'src/index.ts',
+    output: [{ file: pkg.main, format: 'cjs', sourcemap: true }],
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
+    plugins: [
+      ...es5BuildPlugins,
+      replace({
+        ...generateBuildTargetReplaceConfig('cjs', 5),
+        '__RUNTIME_ENV__': 'node'
+      })
+    ]
+  },
+  {
+    input: './dist/app/src/index.d.ts',
+    output: {
+      file: './dist/app/src/global_index.d.ts',
+      format: 'es'
+    },
+    plugins: [
+      dts({
+        respectExternal: true
+      })
+    ]
+  }
+];
+
+export default [...esmBuilds, ...cjsBuilds];

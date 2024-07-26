@@ -58,7 +58,7 @@ export class _FirebaseStorageImpl implements FirebaseStorage {
     constructor(
     app: FirebaseApp, _authProvider: Provider<FirebaseAuthInternalName>,
     _appCheckProvider: Provider<AppCheckInternalComponentName>,
-    _pool: ConnectionPool, _url?: string | undefined, _firebaseVersion?: string | undefined);
+    _url?: string | undefined, _firebaseVersion?: string | undefined);
     readonly app: FirebaseApp;
     // (undocumented)
     readonly _appCheckProvider: Provider<AppCheckInternalComponentName>;
@@ -77,13 +77,15 @@ export class _FirebaseStorageImpl implements FirebaseStorage {
     _getAuthToken(): Promise<string | null>;
     get host(): string;
     set host(host: string);
+    // Warning: (ae-forgotten-export) The symbol "ConnectionType" needs to be exported by the entry point index.d.ts
     // Warning: (ae-forgotten-export) The symbol "RequestInfo" needs to be exported by the entry point index.d.ts
+    // Warning: (ae-forgotten-export) The symbol "Connection" needs to be exported by the entry point index.d.ts
     // Warning: (ae-forgotten-export) The symbol "Request" needs to be exported by the entry point index.d.ts
     //
     // (undocumented)
-    _makeRequest<T>(requestInfo: RequestInfo_2<T>, authToken: string | null, appCheckToken: string | null): Request_2<T>;
+    _makeRequest<I extends ConnectionType, O>(requestInfo: RequestInfo_2<I, O>, requestFactory: () => Connection<I>, authToken: string | null, appCheckToken: string | null, retry?: boolean): Request_2<O>;
     // (undocumented)
-    makeRequestWithTokens<T>(requestInfo: RequestInfo_2<T>): Promise<Request_2<T>>;
+    makeRequestWithTokens<I extends ConnectionType, O>(requestInfo: RequestInfo_2<I, O>, requestFactory: () => Connection<I>): Promise<O>;
     _makeStorageReference(loc: _Location): _Reference;
     get maxOperationRetryTime(): number;
     set maxOperationRetryTime(time: number);
@@ -91,10 +93,6 @@ export class _FirebaseStorageImpl implements FirebaseStorage {
     set maxUploadRetryTime(time: number);
     // (undocumented)
     _overrideAuthToken?: string;
-    // Warning: (ae-forgotten-export) The symbol "ConnectionPool" needs to be exported by the entry point index.d.ts
-    //
-    // (undocumented)
-    readonly _pool: ConnectionPool;
     // (undocumented)
     _protocol: string;
     // (undocumented)
@@ -115,6 +113,12 @@ export interface FullMetadata extends UploadMetadata {
     updated: string;
 }
 
+// @public
+export function getBlob(ref: StorageReference, maxDownloadSizeBytes?: number): Promise<Blob>;
+
+// @public
+export function getBytes(ref: StorageReference, maxDownloadSizeBytes?: number): Promise<ArrayBuffer>;
+
 // @internal (undocumented)
 export function _getChild(ref: StorageReference, childPath: string): _Reference;
 
@@ -127,13 +131,14 @@ export function getMetadata(ref: StorageReference): Promise<FullMetadata>;
 // @public
 export function getStorage(app?: FirebaseApp, bucketUrl?: string): FirebaseStorage;
 
-// Warning: (ae-forgotten-export) The symbol "StorageError" needs to be exported by the entry point index.d.ts
-//
-// @internal (undocumented)
-export function _invalidArgument(message: string): StorageError_2;
+// @public
+export function getStream(ref: StorageReference, maxDownloadSizeBytes?: number): NodeJS.ReadableStream;
 
 // @internal (undocumented)
-export function _invalidRootOperation(name: string): StorageError_2;
+export function _invalidArgument(message: string): StorageError;
+
+// @internal (undocumented)
+export function _invalidRootOperation(name: string): StorageError;
 
 // @public
 export function list(ref: StorageReference, options?: ListOptions): Promise<ListResult>;
@@ -210,8 +215,71 @@ export interface SettableMetadata {
 }
 
 // @public
-export interface StorageError extends FirebaseError {
-    serverResponse: string | null;
+export class StorageError extends FirebaseError {
+    constructor(code: StorageErrorCode, message: string, status_?: number);
+    _codeEquals(code: StorageErrorCode): boolean;
+    customData: {
+        serverResponse: string | null;
+    };
+    get serverResponse(): null | string;
+    set serverResponse(serverResponse: string | null);
+    // (undocumented)
+    get status(): number;
+    set status(status: number);
+    }
+
+// @public
+export enum StorageErrorCode {
+    // (undocumented)
+    APP_DELETED = "app-deleted",
+    // (undocumented)
+    BUCKET_NOT_FOUND = "bucket-not-found",
+    // (undocumented)
+    CANCELED = "canceled",
+    // (undocumented)
+    CANNOT_SLICE_BLOB = "cannot-slice-blob",
+    // (undocumented)
+    INTERNAL_ERROR = "internal-error",
+    // (undocumented)
+    INVALID_ARGUMENT = "invalid-argument",
+    // (undocumented)
+    INVALID_ARGUMENT_COUNT = "invalid-argument-count",
+    // (undocumented)
+    INVALID_CHECKSUM = "invalid-checksum",
+    // (undocumented)
+    INVALID_DEFAULT_BUCKET = "invalid-default-bucket",
+    // (undocumented)
+    INVALID_EVENT_NAME = "invalid-event-name",
+    // (undocumented)
+    INVALID_FORMAT = "invalid-format",
+    // (undocumented)
+    INVALID_ROOT_OPERATION = "invalid-root-operation",
+    // (undocumented)
+    INVALID_URL = "invalid-url",
+    // (undocumented)
+    NO_DEFAULT_BUCKET = "no-default-bucket",
+    // (undocumented)
+    NO_DOWNLOAD_URL = "no-download-url",
+    // (undocumented)
+    OBJECT_NOT_FOUND = "object-not-found",
+    // (undocumented)
+    PROJECT_NOT_FOUND = "project-not-found",
+    // (undocumented)
+    QUOTA_EXCEEDED = "quota-exceeded",
+    // (undocumented)
+    RETRY_LIMIT_EXCEEDED = "retry-limit-exceeded",
+    // (undocumented)
+    SERVER_FILE_WRONG_SIZE = "server-file-wrong-size",
+    // (undocumented)
+    UNAUTHENTICATED = "unauthenticated",
+    // (undocumented)
+    UNAUTHORIZED = "unauthorized",
+    // (undocumented)
+    UNAUTHORIZED_APP = "unauthorized-app",
+    // (undocumented)
+    UNKNOWN = "unknown",
+    // (undocumented)
+    UNSUPPORTED_ENVIRONMENT = "unsupported-environment"
 }
 
 // @public
@@ -236,7 +304,7 @@ export interface StorageReference {
 }
 
 // @public
-export type StringFormat = typeof StringFormat[keyof typeof StringFormat];
+export type StringFormat = (typeof StringFormat)[keyof typeof StringFormat];
 
 // @public
 export const StringFormat: {
@@ -261,7 +329,7 @@ export const _TaskEvent: {
 export type TaskState = 'running' | 'paused' | 'success' | 'canceled' | 'error';
 
 // @internal
-export type _TaskState = typeof _TaskState[keyof typeof _TaskState];
+export type _TaskState = (typeof _TaskState)[keyof typeof _TaskState];
 
 // @internal
 export const _TaskState: {
@@ -311,18 +379,20 @@ export class _UploadTask {
     constructor(ref: _Reference, blob: _FbsBlob, metadata?: Metadata | null);
     _blob: _FbsBlob;
     cancel(): boolean;
-    catch<T>(onRejected: (p1: StorageError_2) => T | Promise<T>): Promise<T>;
+    catch<T>(onRejected: (p1: StorageError) => T | Promise<T>): Promise<T>;
+    // (undocumented)
+    isExponentialBackoffExpired(): boolean;
     // Warning: (ae-forgotten-export) The symbol "Metadata" needs to be exported by the entry point index.d.ts
     _metadata: Metadata | null;
     // Warning: (ae-forgotten-export) The symbol "Unsubscribe" needs to be exported by the entry point index.d.ts
     // Warning: (ae-forgotten-export) The symbol "Subscribe" needs to be exported by the entry point index.d.ts
-    on(type: _TaskEvent, nextOrObserver?: StorageObserver<UploadTaskSnapshot> | null | ((snapshot: UploadTaskSnapshot) => unknown), error?: ((a: StorageError_2) => unknown) | null, completed?: Unsubscribe_2 | null): Unsubscribe_2 | Subscribe_2<UploadTaskSnapshot>;
+    on(type: _TaskEvent, nextOrObserver?: StorageObserver<UploadTaskSnapshot> | null | ((snapshot: UploadTaskSnapshot) => unknown), error?: ((a: StorageError) => unknown) | null, completed?: CompleteFn | null): Unsubscribe_2 | Subscribe_2<UploadTaskSnapshot>;
     pause(): boolean;
     resume(): boolean;
     get snapshot(): UploadTaskSnapshot;
     // Warning: (ae-forgotten-export) The symbol "InternalTaskState" needs to be exported by the entry point index.d.ts
     _state: InternalTaskState;
-    then<U>(onFulfilled?: ((value: UploadTaskSnapshot) => U | Promise<U>) | null, onRejected?: ((error: StorageError_2) => U | Promise<U>) | null): Promise<U>;
+    then<U>(onFulfilled?: ((value: UploadTaskSnapshot) => U | Promise<U>) | null, onRejected?: ((error: StorageError) => U | Promise<U>) | null): Promise<U>;
     _transferred: number;
     }
 

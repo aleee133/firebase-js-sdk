@@ -26,7 +26,13 @@ import {
   getToken,
   onMessage
 } from '@firebase/messaging';
-import { NextFn, Observer, Unsubscribe } from '@firebase/util';
+import {
+  areCookiesEnabled,
+  isIndexedDBAvailable,
+  NextFn,
+  Observer,
+  Unsubscribe
+} from '@firebase/util';
 
 import { onBackgroundMessage } from '@firebase/messaging/sw';
 
@@ -59,12 +65,14 @@ export function isSupported(): boolean {
 
 /**
  * Checks to see if the required APIs exist.
+ * Unlike the modular version, it does not check if IndexedDB.open() is allowed
+ * in order to keep isSupported() synchronous and maintain v8 compatibility.
  */
 function isWindowSupported(): boolean {
   return (
-    'indexedDB' in window &&
-    indexedDB !== null &&
-    navigator.cookieEnabled &&
+    typeof window !== 'undefined' &&
+    isIndexedDBAvailable() &&
+    areCookiesEnabled() &&
     'serviceWorker' in navigator &&
     'PushManager' in window &&
     'Notification' in window &&
@@ -79,8 +87,7 @@ function isWindowSupported(): boolean {
  */
 function isSwSupported(): boolean {
   return (
-    'indexedDB' in self &&
-    indexedDB !== null &&
+    isIndexedDBAvailable() &&
     'PushManager' in self &&
     'Notification' in self &&
     ServiceWorkerRegistration.prototype.hasOwnProperty('showNotification') &&

@@ -16,9 +16,9 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 
 import { SDK_VERSION } from '@firebase/app';
 import { FirebaseError } from '@firebase/util';
@@ -45,15 +45,15 @@ describe('platform_browser/iframe/iframe', () => {
   let libraryLoadedCallback: IframesCallback;
 
   beforeEach(async () => {
-    _window().gapi = ({
+    _window().gapi = {
       iframes: {
         CROSS_ORIGIN_IFRAMES_FILTER: 'cross-origin-filter'
       }
-    } as unknown) as typeof gapi;
+    } as unknown as typeof gapi;
     auth = await testAuth();
 
     sinon.stub(gapiLoader, '_loadGapi').returns(
-      (Promise.resolve({
+      Promise.resolve({
         open: sinon
           .stub()
           .callsFake(
@@ -62,7 +62,7 @@ describe('platform_browser/iframe/iframe', () => {
               libraryLoadedCallback = cb;
             }
           )
-      }) as unknown) as Promise<gapi.iframes.Context>
+      }) as unknown as Promise<gapi.iframes.Context>
     );
   });
 
@@ -84,7 +84,9 @@ describe('platform_browser/iframe/iframe', () => {
         top: '-100px',
         width: '1px',
         height: '1px'
-      }
+      },
+      'aria-hidden': 'true',
+      tabindex: '-1'
     });
     expect(iframeSettings.dontclear).to.be.true;
   });
@@ -113,10 +115,10 @@ describe('platform_browser/iframe/iframe', () => {
     let clearTimeoutStub: sinon.SinonStub;
 
     beforeEach(() => {
-      iframe = sinon.stub(({
+      iframe = sinon.stub({
         restyle: () => {},
         ping: () => {}
-      } as unknown) as gapi.iframes.Iframe);
+      } as unknown as gapi.iframes.Iframe);
       clearTimeoutStub = sinon.stub(_window(), 'clearTimeout');
     });
 

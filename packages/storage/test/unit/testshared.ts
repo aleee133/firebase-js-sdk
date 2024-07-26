@@ -15,16 +15,19 @@
  * limitations under the License.
  */
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 
 use(chaiAsPromised);
 
 import { FirebaseApp } from '@firebase/app-types';
 import { CONFIG_STORAGE_BUCKET_KEY } from '../../src/implementation/constants';
 import { StorageError } from '../../src/implementation/error';
-import { Headers, Connection } from '../../src/implementation/connection';
-import { ConnectionPool } from '../../src/implementation/connectionPool';
-import { SendHook, TestingConnection } from './connection';
+import {
+  Headers,
+  Connection,
+  ConnectionType
+} from '../../src/implementation/connection';
+import { newTestConnection, TestingConnection } from './connection';
 import { FirebaseAuthInternalName } from '@firebase/auth-interop-types';
 import {
   Provider,
@@ -35,6 +38,7 @@ import {
 import { AppCheckInternalComponentName } from '@firebase/app-check-interop-types';
 import { FirebaseStorageImpl } from '../../src/service';
 import { Metadata } from '../../src/metadata';
+import { injectTestConnection } from '../../src/platform/connection';
 
 export const authToken = 'totally-legit-auth-token';
 export const appCheckToken = 'totally-shady-token';
@@ -106,20 +110,14 @@ export function makeFakeAppCheckProvider(tokenResult: {
   return provider as Provider<AppCheckInternalComponentName>;
 }
 
-export function makePool(sendHook: SendHook | null): ConnectionPool {
-  const pool: any = {
-    createConnection() {
-      return new TestingConnection(sendHook);
-    }
-  };
-  return pool as ConnectionPool;
-}
-
 /**
  * Returns something that looks like an fbs.XhrIo with the given headers
  * and status.
  */
-export function fakeXhrIo(headers: Headers, status: number = 200): Connection {
+export function fakeXhrIo<I extends ConnectionType = string>(
+  headers: Headers,
+  status: number = 200
+): Connection<I> {
   const lower: Headers = {};
   for (const [key, value] of Object.entries(headers)) {
     lower[key.toLowerCase()] = value.toString();
@@ -139,7 +137,7 @@ export function fakeXhrIo(headers: Headers, status: number = 200): Connection {
     }
   };
 
-  return fakeConnection as Connection;
+  return fakeConnection as Connection<I>;
 }
 
 /**
@@ -152,16 +150,13 @@ export function bind(f: Function, ctx: any, ...args: any[]): () => void {
   };
 }
 
-export function assertThrows(
-  f: () => void,
-  code: string
-): StorageError {
+export function assertThrows(f: () => void, code: string): StorageError {
   let captured: StorageError | null = null;
   expect(() => {
     try {
       f();
     } catch (e) {
-      captured = e;
+      captured = e as StorageError;
       throw e;
     }
   }).to.throw();
@@ -202,7 +197,7 @@ interface Response {
   body: string;
   headers: Headers;
 }
-type RequestHandler = (
+export type RequestHandler = (
   url: string,
   method: string,
   body?: ArrayBufferView | Blob | string | null,
@@ -210,7 +205,8 @@ type RequestHandler = (
 ) => Response;
 
 export function storageServiceWithHandler(
-  handler: RequestHandler
+  handler: RequestHandler,
+  shouldResponseCb?: () => boolean
 ): FirebaseStorageImpl {
   function newSend(
     connection: TestingConnection,
@@ -220,18 +216,20 @@ export function storageServiceWithHandler(
     headers?: Headers
   ): void {
     const response = handler(url, method, body, headers);
-    connection.simulateResponse(
-      response.status,
-      response.body,
-      response.headers
-    );
+    if (!shouldResponseCb || shouldResponseCb()) {
+      connection.simulateResponse(
+        response.status,
+        response.body,
+        response.headers
+      );
+    }
   }
 
+  injectTestConnection(() => newTestConnection(newSend));
   return new FirebaseStorageImpl(
     {} as FirebaseApp,
     emptyAuthProvider,
-    fakeAppCheckTokenProvider,
-    makePool(newSend)
+    fakeAppCheckTokenProvider
   );
 }
 
@@ -355,6 +353,239 @@ export function fakeServerHandler(
     }
 
     return { status: 400, body: '', headers: {} };
+  }
+  return handler;
+}
+
+/**
+ * Responds with a 503 for finalize.
+ * @param fakeMetadata metadata to respond with for finalize
+ * @returns a handler for requests
+ */
+export function fake503ForFinalizeServerHandler(
+  fakeMetadata: Partial<Metadata> = defaultFakeMetadata
+): RequestHandler {
+  const stats: {
+    [num: number]: {
+      currentSize: number;
+      finalSize: number;
+    };
+  } = {};
+
+  let nextId: number = 0;
+
+  function statusHeaders(status: string, existing?: Headers): Headers {
+    if (existing) {
+      existing['X-Goog-Upload-Status'] = status;
+      return existing;
+    } else {
+      return { 'X-Goog-Upload-Status': status };
+    }
+  }
+
+  function handler(
+    url: string,
+    method: string,
+    content?: ArrayBufferView | Blob | string | null,
+    headers?: Headers
+  ): Response {
+    method = method || 'GET';
+    content = content || '';
+    headers = headers || {};
+
+    // const contentLength =
+    // (content as Blob).size || (content as string).length || 0;
+    if (headers['X-Goog-Upload-Protocol'] === 'resumable') {
+      const thisId = nextId;
+      nextId++;
+      stats[thisId] = {
+        currentSize: 0,
+        finalSize: +headers['X-Goog-Upload-Header-Content-Length']
+      };
+
+      return {
+        status: 200,
+        body: '',
+        headers: statusHeaders('active', {
+          'X-Goog-Upload-URL': 'http://example.com?' + thisId
+        })
+      };
+    }
+
+    const matches = url.match(/^http:\/\/example\.com\?([0-9]+)$/);
+    if (matches === null) {
+      return { status: 400, body: '', headers: {} };
+    }
+
+    const id = +matches[1];
+    if (!stats[id]) {
+      return { status: 400, body: 'Invalid upload id', headers: {} };
+    }
+
+    if (headers['X-Goog-Upload-Command'] === 'query') {
+      return {
+        status: 200,
+        body: '',
+        headers: statusHeaders('active', {
+          'X-Goog-Upload-Size-Received': stats[id].finalSize.toString()
+        })
+      };
+    }
+
+    const commands = (headers['X-Goog-Upload-Command'] as string)
+      .split(',')
+      .map(str => {
+        return str.trim();
+      });
+    const isFinalize = commands.indexOf('finalize') !== -1;
+
+    if (isFinalize) {
+      return {
+        status: 503,
+        body: JSON.stringify(fakeMetadata),
+        headers: statusHeaders('final')
+      };
+    } else {
+      return {
+        status: 200,
+        body: JSON.stringify(fakeMetadata),
+        headers: statusHeaders('active')
+      };
+    }
+  }
+  return handler;
+}
+
+/**
+ * Responds with a 503 for upload.
+ * @param fakeMetadata metadata to respond with for query
+ * @returns a handler for requests
+ */
+export function fake503ForUploadServerHandler(
+  fakeMetadata: Partial<Metadata> = defaultFakeMetadata,
+  cb?: () => void
+): RequestHandler {
+  const stats: {
+    [num: number]: {
+      currentSize: number;
+      finalSize: number;
+    };
+  } = {};
+
+  let nextId: number = 0;
+
+  function statusHeaders(status: string, existing?: Headers): Headers {
+    if (existing) {
+      existing['X-Goog-Upload-Status'] = status;
+      return existing;
+    } else {
+      return { 'X-Goog-Upload-Status': status };
+    }
+  }
+
+  function handler(
+    url: string,
+    method: string,
+    content?: ArrayBufferView | Blob | string | null,
+    headers?: Headers
+  ): Response {
+    method = method || 'GET';
+    content = content || '';
+    headers = headers || {};
+
+    // const contentLength =
+    // (content as Blob).size || (content as string).length || 0;
+    if (headers['X-Goog-Upload-Protocol'] === 'resumable') {
+      const thisId = nextId;
+      nextId++;
+      stats[thisId] = {
+        currentSize: 0,
+        finalSize: +headers['X-Goog-Upload-Header-Content-Length']
+      };
+
+      return {
+        status: 200,
+        body: '',
+        headers: statusHeaders('active', {
+          'X-Goog-Upload-URL': 'http://example.com?' + thisId
+        })
+      };
+    }
+
+    const matches = url.match(/^http:\/\/example\.com\?([0-9]+)$/);
+    if (matches === null) {
+      return { status: 400, body: '', headers: {} };
+    }
+
+    const id = +matches[1];
+    if (!stats[id]) {
+      return { status: 400, body: 'Invalid upload id', headers: {} };
+    }
+
+    if (headers['X-Goog-Upload-Command'] === 'query') {
+      return {
+        status: 200,
+        body: '',
+        headers: statusHeaders('active', {
+          'X-Goog-Upload-Size-Received': stats[id].currentSize.toString()
+        })
+      };
+    }
+
+    const commands = (headers['X-Goog-Upload-Command'] as string)
+      .split(',')
+      .map(str => {
+        return str.trim();
+      });
+    const isUpload = commands.indexOf('upload') !== -1;
+
+    if (isUpload) {
+      if (cb) {
+        cb();
+      }
+      return {
+        status: 503,
+        body: JSON.stringify(fakeMetadata),
+        headers: statusHeaders('active')
+      };
+    } else {
+      return {
+        status: 200,
+        body: JSON.stringify(fakeMetadata),
+        headers: statusHeaders('final')
+      };
+    }
+  }
+  return handler;
+}
+
+export function fakeOneShot503ServerHandler(
+  fakeMetadata: Partial<Metadata> = defaultFakeMetadata
+): RequestHandler {
+  function statusHeaders(status: string, existing?: Headers): Headers {
+    if (existing) {
+      existing['X-Goog-Upload-Status'] = status;
+      return existing;
+    } else {
+      return { 'X-Goog-Upload-Status': status };
+    }
+  }
+
+  function handler(
+    url: string,
+    method: string,
+    content?: ArrayBufferView | Blob | string | null,
+    headers?: Headers
+  ): Response {
+    method = method || 'GET';
+    content = content || '';
+    headers = headers || {};
+
+    return {
+      status: 503,
+      body: JSON.stringify(fakeMetadata),
+      headers: statusHeaders('final')
+    };
   }
   return handler;
 }

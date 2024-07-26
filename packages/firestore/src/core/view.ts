@@ -27,13 +27,7 @@ import { DocumentSet } from '../model/document_set';
 import { TargetChange } from '../remote/remote_event';
 import { debugAssert, fail } from '../util/assert';
 
-import {
-  hasLimitToFirst,
-  hasLimitToLast,
-  newQueryComparator,
-  Query,
-  queryMatches
-} from './query';
+import { LimitType, newQueryComparator, Query, queryMatches } from './query';
 import { OnlineState } from './types';
 import {
   ChangeType,
@@ -78,6 +72,7 @@ export interface ViewChange {
  */
 export class View {
   private syncState: SyncState | null = null;
+  private hasCachedResults: boolean = false;
   /**
    * A flag whether the view is current with the backend. A view is considered
    * current after it has seen the current flag from the backend and did not
@@ -146,11 +141,13 @@ export class View {
     // Note that this should never get used in a refill (when previousChanges is
     // set), because there will only be adds -- no deletes or updates.
     const lastDocInLimit =
-      hasLimitToFirst(this.query) && oldDocumentSet.size === this.query.limit
+      this.query.limitType === LimitType.First &&
+      oldDocumentSet.size === this.query.limit
         ? oldDocumentSet.last()
         : null;
     const firstDocInLimit =
-      hasLimitToLast(this.query) && oldDocumentSet.size === this.query.limit
+      this.query.limitType === LimitType.Last &&
+      oldDocumentSet.size === this.query.limit
         ? oldDocumentSet.first()
         : null;
 
@@ -228,11 +225,12 @@ export class View {
     });
 
     // Drop documents out to meet limit/limitToLast requirement.
-    if (hasLimitToFirst(this.query) || hasLimitToLast(this.query)) {
+    if (this.query.limit !== null) {
       while (newDocumentSet.size > this.query.limit!) {
-        const oldDoc = hasLimitToFirst(this.query)
-          ? newDocumentSet.last()
-          : newDocumentSet.first();
+        const oldDoc =
+          this.query.limitType === LimitType.First
+            ? newDocumentSet.last()
+            : newDocumentSet.first();
         newDocumentSet = newDocumentSet.delete(oldDoc!.key);
         newMutatedKeys = newMutatedKeys.delete(oldDoc!.key);
         changeSet.track({ type: ChangeType.Removed, doc: oldDoc! });
@@ -273,17 +271,21 @@ export class View {
    * Updates the view with the given ViewDocumentChanges and optionally updates
    * limbo docs and sync state from the provided target change.
    * @param docChanges - The set of changes to make to the view's docs.
-   * @param updateLimboDocuments - Whether to update limbo documents based on
+   * @param limboResolutionEnabled - Whether to update limbo documents based on
    *        this change.
    * @param targetChange - A target change to apply for computing limbo docs and
    *        sync state.
+   * @param targetIsPendingReset - Whether the target is pending to reset due to
+   *        existence filter mismatch. If not explicitly specified, it is treated
+   *        equivalently to `false`.
    * @returns A new ViewChange with the given docs, changes, and sync state.
    */
   // PORTING NOTE: The iOS/Android clients always compute limbo document changes.
   applyChanges(
     docChanges: ViewDocumentChanges,
-    updateLimboDocuments: boolean,
-    targetChange?: TargetChange
+    limboResolutionEnabled: boolean,
+    targetChange?: TargetChange,
+    targetIsPendingReset?: boolean
   ): ViewChange {
     debugAssert(
       !docChanges.needsRefill,
@@ -302,10 +304,18 @@ export class View {
     });
 
     this.applyTargetChange(targetChange);
-    const limboChanges = updateLimboDocuments
-      ? this.updateLimboDocuments()
-      : [];
-    const synced = this.limboDocuments.size === 0 && this.current;
+
+    targetIsPendingReset = targetIsPendingReset ?? false;
+    const limboChanges =
+      limboResolutionEnabled && !targetIsPendingReset
+        ? this.updateLimboDocuments()
+        : [];
+
+    // We are at synced state if there is no limbo docs are waiting to be resolved, view is current
+    // with the backend, and the query is not pending to reset due to existence filter mismatch.
+    const synced =
+      this.limboDocuments.size === 0 && this.current && !targetIsPendingReset;
+
     const newSyncState = synced ? SyncState.Synced : SyncState.Local;
     const syncStateChanged = newSyncState !== this.syncState;
     this.syncState = newSyncState;
@@ -322,7 +332,10 @@ export class View {
         docChanges.mutatedKeys,
         newSyncState === SyncState.Local,
         syncStateChanged,
-        /* excludesMetadataChanges= */ false
+        /* excludesMetadataChanges= */ false,
+        targetChange
+          ? targetChange.resumeToken.approximateByteSize() > 0
+          : false
       );
       return {
         snapshot: snap,
@@ -349,7 +362,7 @@ export class View {
           mutatedKeys: this.mutatedKeys,
           needsRefill: false
         },
-        /* updateLimboDocuments= */ false
+        /* limboResolutionEnabled= */ false
       );
     } else {
       // No effect, just return a no-op ViewChange.
@@ -457,7 +470,7 @@ export class View {
     this._syncedDocuments = queryResult.remoteKeys;
     this.limboDocuments = documentKeySet();
     const docChanges = this.computeDocChanges(queryResult.documents);
-    return this.applyChanges(docChanges, /*updateLimboDocuments=*/ true);
+    return this.applyChanges(docChanges, /* limboResolutionEnabled= */ true);
   }
 
   /**
@@ -471,7 +484,8 @@ export class View {
       this.query,
       this.documentSet,
       this.mutatedKeys,
-      this.syncState === SyncState.Local
+      this.syncState === SyncState.Local,
+      this.hasCachedResults
     );
   }
 }

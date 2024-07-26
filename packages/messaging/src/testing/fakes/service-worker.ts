@@ -32,7 +32,7 @@ declare const self: Window & Writable<ServiceWorkerGlobalScope>;
 // exist. This is because we're not actually running these tests in a service worker context.
 
 // Here we're adding placeholders for Sinon to overwrite, which prevents the "Cannot stub
-// non-existent own property" errors.
+// nonexistent own property" errors.
 
 // Casting to any is needed because TS also thinks that we're in a SW context and considers these
 // properties readonly.
@@ -80,7 +80,7 @@ class FakeWindowClient implements WindowClient {
   readonly id: string;
   readonly type = 'window';
   focused = false;
-  visibilityState: VisibilityState = 'hidden';
+  visibilityState: DocumentVisibilityState = 'hidden';
   url = 'https://example.org';
 
   constructor() {
@@ -101,7 +101,8 @@ class FakeWindowClient implements WindowClient {
 }
 
 export class FakeServiceWorkerRegistration
-  implements ServiceWorkerRegistration {
+  implements ServiceWorkerRegistration
+{
   active = null;
   installing = null;
   waiting = null;
@@ -110,9 +111,8 @@ export class FakeServiceWorkerRegistration
   scope = '/scope-value';
 
   // Unused in FCM Web SDK, no need to mock these.
-  navigationPreload = (null as unknown) as NavigationPreloadManager;
-  sync = (null as unknown) as SyncManager;
-  updateViaCache = (null as unknown) as ServiceWorkerUpdateViaCache;
+  navigationPreload = null as unknown as NavigationPreloadManager;
+  updateViaCache = null as unknown as ServiceWorkerUpdateViaCache;
 
   async getNotifications() {
     return [];
@@ -168,8 +168,8 @@ export class FakePushSubscription implements PushSubscription {
   }
 
   // Unused in FCM
-  toJSON = (null as unknown) as () => PushSubscriptionJSON;
-  options = (null as unknown) as PushSubscriptionOptions;
+  toJSON = null as unknown as () => PushSubscriptionJSON;
+  options = null as unknown as PushSubscriptionOptions;
 }
 
 /**

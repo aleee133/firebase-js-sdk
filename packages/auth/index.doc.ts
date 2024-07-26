@@ -28,4 +28,4 @@
 export * from './index';
 
 export { cordovaPopupRedirectResolver } from './index.cordova';
-export { reactNativeLocalPersistence } from './index.rn';
+export { getReactNativePersistence } from './index.rn';

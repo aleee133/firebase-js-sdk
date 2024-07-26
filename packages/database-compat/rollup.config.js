@@ -18,12 +18,14 @@
 import json from '@rollup/plugin-json';
 import typescriptPlugin from 'rollup-plugin-typescript2';
 import typescript from 'typescript';
+import commonjs from '@rollup/plugin-commonjs';
+import resolveModule from '@rollup/plugin-node-resolve';
 
 import pkg from './package.json';
+import standalonePkg from './standalone/package.json';
+import { emitModulePackageFile } from '../../scripts/build/rollup_emit_module_package_file';
 
-const deps = Object.keys(
-  Object.assign({}, pkg.peerDependencies, pkg.dependencies)
-);
+const deps = Object.keys({ ...pkg.peerDependencies, ...pkg.dependencies });
 
 function onWarn(warning, defaultWarn) {
   if (warning.code === 'CIRCULAR_DEPENDENCY') {
@@ -32,9 +34,6 @@ function onWarn(warning, defaultWarn) {
   defaultWarn(warning);
 }
 
-/**
- * ES5 Builds
- */
 const es5BuildPlugins = [
   typescriptPlugin({
     typescript,
@@ -43,7 +42,20 @@ const es5BuildPlugins = [
   json()
 ];
 
-const es5Builds = [
+const es2017BuildPlugins = [
+  typescriptPlugin({
+    typescript,
+    tsconfigOverride: {
+      compilerOptions: {
+        target: 'es2017'
+      }
+    },
+    abortOnError: false
+  }),
+  json({ preferConst: true })
+];
+
+const esmBuilds = [
   /**
    * Node.js Build
    */
@@ -51,12 +63,12 @@ const es5Builds = [
     input: 'src/index.node.ts',
     output: [
       {
-        file: pkg.main,
-        format: 'cjs',
+        file: pkg.exports['.'].node.import,
+        format: 'es',
         sourcemap: true
       }
     ],
-    plugins: es5BuildPlugins,
+    plugins: [...es2017BuildPlugins, emitModulePackageFile()],
     treeshake: {
       moduleSideEffects: false
     },
@@ -81,29 +93,7 @@ const es5Builds = [
     },
     external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
     onwarn: onWarn
-  }
-];
-
-/**
- * ES2017 Builds
- */
-const es2017BuildPlugins = [
-  typescriptPlugin({
-    typescript,
-    tsconfigOverride: {
-      compilerOptions: {
-        target: 'es2017'
-      }
-    },
-    abortOnError: false
-  }),
-  json({ preferConst: true })
-];
-
-const es2017Builds = [
-  /**
-   * Browser Build
-   */
+  },
   {
     input: 'src/index.ts',
     output: [
@@ -122,4 +112,56 @@ const es2017Builds = [
   }
 ];
 
-export default [...es5Builds, ...es2017Builds];
+const cjsBuilds = [
+  /**
+   * Node.js Build
+   */
+  {
+    input: 'src/index.node.ts',
+    output: [
+      {
+        file: pkg.main,
+        format: 'cjs',
+        sourcemap: true
+      }
+    ],
+    plugins: es5BuildPlugins,
+    treeshake: {
+      moduleSideEffects: false
+    },
+    external: id => deps.some(dep => id === dep || id.startsWith(`${dep}/`)),
+    onwarn: onWarn
+  },
+  /**
+   * Standalone Build (used by Admin SDK).
+   * @firebase/database and only @firebase/database is bundled in this build.
+   */
+  {
+    input: 'src/index.standalone.ts',
+    output: [
+      {
+        file: standalonePkg.main.replace('../', ''),
+        format: 'cjs',
+        sourcemap: true
+      }
+    ],
+    plugins: [
+      ...es5BuildPlugins,
+      resolveModule({
+        exportConditions: ['standalone'],
+        preferBuiltins: true
+      }),
+      commonjs()
+    ],
+    treeshake: {
+      moduleSideEffects: false
+    },
+    external: id =>
+      deps
+        .filter(dep => dep !== '@firebase/database')
+        .some(dep => id === dep || id.startsWith(`${dep}/`)),
+    onwarn: onWarn
+  }
+];
+
+export default [...esmBuilds, ...cjsBuilds];

@@ -28,6 +28,11 @@ import {
 } from '@firebase/component';
 import { AppCheckService } from './service';
 import { FirebaseAppCheck } from '@firebase/app-check-types';
+import {
+  ReCaptchaV3Provider,
+  ReCaptchaEnterpriseProvider,
+  CustomProvider
+} from '@firebase/app-check';
 
 const factory: InstanceFactory<'appCheck-compat'> = (
   container: ComponentContainer
@@ -40,7 +45,15 @@ const factory: InstanceFactory<'appCheck-compat'> = (
 
 export function registerAppCheck(): void {
   (firebase as _FirebaseNamespace).INTERNAL.registerComponent(
-    new Component('appCheck-compat', factory, ComponentType.PUBLIC)
+    new Component(
+      'appCheck-compat',
+      factory,
+      ComponentType.PUBLIC
+    ).setServiceProps({
+      ReCaptchaEnterpriseProvider,
+      ReCaptchaV3Provider,
+      CustomProvider
+    })
   );
 }
 

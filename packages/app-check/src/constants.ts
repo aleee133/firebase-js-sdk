@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 export const BASE_ENDPOINT =
-  'https://content-firebaseappcheck.googleapis.com/v1beta';
+  'https://content-firebaseappcheck.googleapis.com/v1';
 
-export const EXCHANGE_RECAPTCHA_TOKEN_METHOD = 'exchangeRecaptchaToken';
+export const EXCHANGE_RECAPTCHA_TOKEN_METHOD = 'exchangeRecaptchaV3Token';
+export const EXCHANGE_RECAPTCHA_ENTERPRISE_TOKEN_METHOD =
+  'exchangeRecaptchaEnterpriseToken';
 export const EXCHANGE_DEBUG_TOKEN_METHOD = 'exchangeDebugToken';
 
 export const TOKEN_REFRESH_TIME = {
@@ -36,3 +38,8 @@ export const TOKEN_REFRESH_TIME = {
    */
   RETRIAL_MAX_WAIT: 16 * 60 * 1000
 };
+
+/**
+ * One day in millis, for certain error code backoffs.
+ */
+export const ONE_DAY = 24 * 60 * 60 * 1000;

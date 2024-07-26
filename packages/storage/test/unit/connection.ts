@@ -19,10 +19,7 @@ import {
   Headers,
   Connection
 } from '../../src/implementation/connection';
-import {
-  StorageError,
-  StorageErrorCode
-} from '../../src/implementation/error';
+import { StorageError, StorageErrorCode } from '../../src/implementation/error';
 
 export type SendHook = (
   connection: TestingConnection,
@@ -38,7 +35,7 @@ export enum State {
   DONE = 2
 }
 
-export class TestingConnection implements Connection {
+export class TestingConnection implements Connection<string> {
   private state: State;
   private sendPromise: Promise<void>;
   private resolve!: () => void;
@@ -67,10 +64,7 @@ export class TestingConnection implements Connection {
     headers?: Headers
   ): Promise<void> {
     if (this.state !== State.START) {
-      throw new StorageError(
-        StorageErrorCode.UNKNOWN,
-        "Can't send again"
-      );
+      throw new StorageError(StorageErrorCode.UNKNOWN, "Can't send again");
     }
 
     this.state = State.SENT;
@@ -113,13 +107,17 @@ export class TestingConnection implements Connection {
     return this.status;
   }
 
-  getResponseText(): string {
+  getResponse(): string {
+    return this.responseText;
+  }
+
+  getErrorText(): string {
     return this.responseText;
   }
 
   abort(): void {
     this.state = State.START;
-    this.errorCode = ErrorCode.NO_ERROR;
+    this.errorCode = ErrorCode.ABORT;
     this.resolve();
   }
 
@@ -139,4 +137,10 @@ export class TestingConnection implements Connection {
   removeUploadProgressListener(): void {
     // TODO(andysoto): impl
   }
+}
+
+export function newTestConnection(
+  sendHook?: SendHook | null
+): Connection<string> {
+  return new TestingConnection(sendHook ?? null);
 }

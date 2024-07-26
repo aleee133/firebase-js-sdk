@@ -26,6 +26,7 @@ import { getDatastore } from './components';
 import { Firestore } from './database';
 import { FieldPath } from './field_path';
 import {
+  DocumentData,
   DocumentReference,
   PartialWithFieldValue,
   SetOptions,
@@ -73,9 +74,9 @@ export class WriteBatch {
    * @param data - An object of the fields and values for the document.
    * @returns This `WriteBatch` instance. Used for chaining method calls.
    */
-  set<T>(
-    documentRef: DocumentReference<T>,
-    data: WithFieldValue<T>
+  set<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>,
+    data: WithFieldValue<AppModelType>
   ): WriteBatch;
   /**
    * Writes to the document referred to by the provided {@link
@@ -86,16 +87,17 @@ export class WriteBatch {
    * @param documentRef - A reference to the document to be set.
    * @param data - An object of the fields and values for the document.
    * @param options - An object to configure the set behavior.
+   * @throws Error - If the provided input is not a valid Firestore document.
    * @returns This `WriteBatch` instance. Used for chaining method calls.
    */
-  set<T>(
-    documentRef: DocumentReference<T>,
-    data: PartialWithFieldValue<T>,
+  set<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>,
+    data: PartialWithFieldValue<AppModelType>,
     options: SetOptions
   ): WriteBatch;
-  set<T>(
-    documentRef: DocumentReference<T>,
-    data: WithFieldValue<T> | PartialWithFieldValue<T>,
+  set<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>,
+    data: WithFieldValue<AppModelType> | PartialWithFieldValue<AppModelType>,
     options?: SetOptions
   ): WriteBatch {
     this._verifyNotCommitted();
@@ -127,9 +129,13 @@ export class WriteBatch {
    * @param data - An object containing the fields and values with which to
    * update the document. Fields can contain dots to reference nested fields
    * within the document.
+   * @throws Error - If the provided input is not valid Firestore data.
    * @returns This `WriteBatch` instance. Used for chaining method calls.
    */
-  update<T>(documentRef: DocumentReference<T>, data: UpdateData<T>): WriteBatch;
+  update<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>,
+    data: UpdateData<DbModelType>
+  ): WriteBatch;
   /**
    * Updates fields in the document referred to by this {@link
    * DocumentReference}. The update will fail if applied to a document that does
@@ -142,17 +148,18 @@ export class WriteBatch {
    * @param field - The first field to update.
    * @param value - The first value.
    * @param moreFieldsAndValues - Additional key value pairs.
+   * @throws Error - If the provided input is not valid Firestore data.
    * @returns This `WriteBatch` instance. Used for chaining method calls.
    */
-  update(
-    documentRef: DocumentReference<unknown>,
+  update<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>,
     field: string | FieldPath,
     value: unknown,
     ...moreFieldsAndValues: unknown[]
   ): WriteBatch;
-  update<T>(
-    documentRef: DocumentReference<T>,
-    fieldOrUpdateData: string | FieldPath | UpdateData<T>,
+  update<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>,
+    fieldOrUpdateData: string | FieldPath | UpdateData<DbModelType>,
     value?: unknown,
     ...moreFieldsAndValues: unknown[]
   ): WriteBatch {
@@ -197,7 +204,9 @@ export class WriteBatch {
    * @param documentRef - A reference to the document to be deleted.
    * @returns This `WriteBatch` instance. Used for chaining method calls.
    */
-  delete(documentRef: DocumentReference<unknown>): WriteBatch {
+  delete<AppModelType, DbModelType extends DocumentData>(
+    documentRef: DocumentReference<AppModelType, DbModelType>
+  ): WriteBatch {
     this._verifyNotCommitted();
     const ref = validateReference(documentRef, this._firestore);
     this._mutations = this._mutations.concat(
@@ -239,10 +248,15 @@ export class WriteBatch {
   }
 }
 
-export function validateReference<T>(
-  documentRef: DocumentReference<T> | Compat<DocumentReference<T>>,
+export function validateReference<
+  AppModelType,
+  DbModelType extends DocumentData
+>(
+  documentRef:
+    | DocumentReference<AppModelType, DbModelType>
+    | Compat<DocumentReference<AppModelType, DbModelType>>,
   firestore: Firestore
-): DocumentReference<T> {
+): DocumentReference<AppModelType, DbModelType> {
   documentRef = getModularInstance(documentRef);
 
   if (documentRef.firestore !== firestore) {
@@ -251,7 +265,7 @@ export function validateReference<T>(
       'Provided document reference is from a different Firestore instance.'
     );
   } else {
-    return documentRef as DocumentReference<T>;
+    return documentRef as DocumentReference<AppModelType, DbModelType>;
   }
 }
 

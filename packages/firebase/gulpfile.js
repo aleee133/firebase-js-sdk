@@ -27,12 +27,24 @@ const files = pkgJson.components.map(component => {
 const FIREBASE_APP_URL = `https://www.gstatic.com/firebasejs/${pkgJson.version}/firebase-app.js`;
 
 gulp.task('cdn-type-module-path', function () {
+  return (
+    gulp
+      .src(files)
+      .pipe(sourcemaps.init({ loadMaps: true }))
+      // gulp-replace doesn't work with gulp-sourcemaps, so no change is made to the existing sourcemap.
+      // Therefore the sourcemap become slightly inaccurate
+      .pipe(replace(/(['"])@firebase\/app(['"])/g, `$1${FIREBASE_APP_URL}$2`))
+      .pipe(sourcemaps.write('.'))
+      .pipe(gulp.dest('.'))
+  );
+});
+
+//google3 does not allow imports from absolute URLs, so we cannot use the gstatic link
+gulp.task('cdn-type-module-path-internal', function () {
   return gulp
     .src(files)
     .pipe(sourcemaps.init({ loadMaps: true }))
-    // gulp-replace doesn't work with gulp-sourcemaps, so no change is made to the existing sourcemap. 
-    // Therefore the sourcemap become slightly inaccurate
-    .pipe(replace('@firebase/app', FIREBASE_APP_URL))
+    .pipe(replace(/(['"])@firebase\/app(['"])/g, "'./firebase-app.js'"))
     .pipe(sourcemaps.write('.'))
     .pipe(gulp.dest('.'));
 });

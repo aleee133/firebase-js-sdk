@@ -38,15 +38,17 @@ export const enum TimerId {
   All = 'all',
 
   /**
-   * The following 4 timers are used in persistent_stream.ts for the listen and
+   * The following 5 timers are used in persistent_stream.ts for the listen and
    * write streams. The "Idle" timer is used to close the stream due to
    * inactivity. The "ConnectionBackoff" timer is used to restart a stream once
-   * the appropriate backoff delay has elapsed.
+   * the appropriate backoff delay has elapsed. The health check is used to mark
+   * a stream healthy if it has not received an error during its initial setup.
    */
   ListenStreamIdle = 'listen_stream_idle',
   ListenStreamConnectionBackoff = 'listen_stream_connection_backoff',
   WriteStreamIdle = 'write_stream_idle',
   WriteStreamConnectionBackoff = 'write_stream_connection_backoff',
+  HealthCheckTimeout = 'health_check_timeout',
 
   /**
    * A timer used in online_state_tracker.ts to transition from
@@ -74,7 +76,12 @@ export const enum TimerId {
    * A timer used to retry operations scheduled via retryable AsyncQueue
    * operations.
    */
-  AsyncQueueRetry = 'async_queue_retry'
+  AsyncQueueRetry = 'async_queue_retry',
+
+  /**
+   *  A timer used to periodically attempt index backfill.
+   */
+  IndexBackfill = 'index_backfill'
 }
 
 /**
@@ -106,6 +113,10 @@ export class DelayedOperation<T extends unknown> implements PromiseLike<T> {
     // and so we attach a dummy catch callback to avoid
     // 'UnhandledPromiseRejectionWarning' log spam.
     this.deferred.promise.catch(err => {});
+  }
+
+  get promise(): Promise<T> {
+    return this.deferred.promise;
   }
 
   /**
@@ -225,7 +236,7 @@ export interface AsyncQueue {
    * `enqueueEvenWhileRestricted()`.
    *
    * @param purgeExistingTasks Whether already enqueued tasked should be
-   * rejected (unless enqueued wih `enqueueEvenWhileRestricted()`). Defaults
+   * rejected (unless enqueued with `enqueueEvenWhileRestricted()`). Defaults
    * to false.
    */
   enterRestrictedMode(purgeExistingTasks?: boolean): void;

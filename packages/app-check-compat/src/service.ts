@@ -26,6 +26,7 @@ import {
   CustomProvider,
   initializeAppCheck,
   ReCaptchaV3Provider,
+  ReCaptchaEnterpriseProvider,
   setTokenAutoRefreshEnabled as setTokenAutoRefreshEnabledExp,
   getToken as getTokenExp,
   onTokenChanged as onTokenChangedExp
@@ -43,9 +44,18 @@ export class AppCheckService
     siteKeyOrProvider: string | AppCheckProvider,
     isTokenAutoRefreshEnabled?: boolean
   ): void {
-    let provider: ReCaptchaV3Provider | CustomProvider;
+    let provider:
+      | ReCaptchaV3Provider
+      | CustomProvider
+      | ReCaptchaEnterpriseProvider;
     if (typeof siteKeyOrProvider === 'string') {
       provider = new ReCaptchaV3Provider(siteKeyOrProvider);
+    } else if (
+      siteKeyOrProvider instanceof ReCaptchaEnterpriseProvider ||
+      siteKeyOrProvider instanceof ReCaptchaV3Provider ||
+      siteKeyOrProvider instanceof CustomProvider
+    ) {
+      provider = siteKeyOrProvider;
     } else {
       provider = new CustomProvider({ getToken: siteKeyOrProvider.getToken });
     }
@@ -89,7 +99,7 @@ export class AppCheckService
       this._delegate,
       /**
        * Exp onTokenChanged() will handle both overloads but we need
-       * to specify one to not confuse Typescript.
+       * to specify one to not confuse TypeScript.
        */
       onNextOrObserver as (tokenResult: AppCheckTokenResult) => void,
       onError,

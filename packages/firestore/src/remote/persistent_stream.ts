@@ -16,6 +16,7 @@
  */
 
 import { CredentialsProvider, Token } from '../api/credentials';
+import { User } from '../auth/user';
 import { SnapshotVersion } from '../core/snapshot_version';
 import { TargetId } from '../core/types';
 import { TargetData } from '../local/target_data';
@@ -98,6 +99,13 @@ const enum PersistentStreamState {
   Open,
 
   /**
+   * The stream is healthy and has been connected for more than 10 seconds. We
+   * therefore assume that the credentials we passed were valid. Both
+   * isStarted() and isOpen() will return true.
+   */
+  Healthy,
+
+  /**
    * The stream encountered an error. The next start attempt will back off.
    * While in this state isStarted() will return false.
    */
@@ -118,6 +126,11 @@ const enum PersistentStreamState {
  */
 export interface PersistentStreamListener {
   /**
+   * Called after receiving an acknowledgement from the server, confirming that
+   * we are able to connect to it.
+   */
+  onConnected: () => Promise<void>;
+  /**
    * Called after the stream was established and can accept outgoing
    * messages
    */
@@ -131,6 +144,9 @@ export interface PersistentStreamListener {
 
 /** The time a stream stays open after it is marked idle. */
 const IDLE_TIMEOUT_MS = 60 * 1000;
+
+/** The time a stream stays open until we consider it healthy. */
+const HEALTHY_TIMEOUT_MS = 10 * 1000;
 
 /**
  * A PersistentStream is an abstract base class that represents a streaming RPC
@@ -178,6 +194,7 @@ export abstract class PersistentStream<
   private closeCount = 0;
 
   private idleTimer: DelayedOperation<void> | null = null;
+  private healthCheck: DelayedOperation<void> | null = null;
   private stream: Stream<SendType, ReceiveType> | null = null;
 
   protected backoff: ExponentialBackoff;
@@ -186,12 +203,19 @@ export abstract class PersistentStream<
     private queue: AsyncQueue,
     connectionTimerId: TimerId,
     private idleTimerId: TimerId,
+    private healthTimerId: TimerId,
     protected connection: Connection,
-    private credentialsProvider: CredentialsProvider,
+    private authCredentialsProvider: CredentialsProvider<User>,
+    private appCheckCredentialsProvider: CredentialsProvider<string>,
     protected listener: ListenerType
   ) {
     this.backoff = new ExponentialBackoff(queue, connectionTimerId);
   }
+
+  /**
+   * Count of response messages received.
+   */
+  protected responseCount: number = 0;
 
   /**
    * Returns true if start() has been called and no error has occurred. True
@@ -203,8 +227,8 @@ export abstract class PersistentStream<
   isStarted(): boolean {
     return (
       this.state === PersistentStreamState.Starting ||
-      this.state === PersistentStreamState.Open ||
-      this.state === PersistentStreamState.Backoff
+      this.state === PersistentStreamState.Backoff ||
+      this.isOpen()
     );
   }
 
@@ -213,7 +237,10 @@ export abstract class PersistentStream<
    * called) and the stream is ready for outbound requests.
    */
   isOpen(): boolean {
-    return this.state === PersistentStreamState.Open;
+    return (
+      this.state === PersistentStreamState.Open ||
+      this.state === PersistentStreamState.Healthy
+    );
   }
 
   /**
@@ -224,6 +251,7 @@ export abstract class PersistentStream<
    * When start returns, isStarted() will return true.
    */
   start(): void {
+    this.responseCount = 0;
     if (this.state === PersistentStreamState.Error) {
       this.performBackoff();
       return;
@@ -311,6 +339,14 @@ export abstract class PersistentStream<
     }
   }
 
+  /** Cancels the health check delayed operation. */
+  private cancelHealthCheck(): void {
+    if (this.healthCheck) {
+      this.healthCheck.cancel();
+      this.healthCheck = null;
+    }
+  }
+
   /**
    * Closes the stream and cleans up as necessary:
    *
@@ -336,6 +372,7 @@ export abstract class PersistentStream<
 
     // Cancel any outstanding timers (they're guaranteed not to execute).
     this.cancelIdleCheck();
+    this.cancelHealthCheck();
     this.backoff.cancel();
 
     // Invalidates any stream-related callbacks (e.g. from auth or the
@@ -352,10 +389,19 @@ export abstract class PersistentStream<
         'Using maximum backoff delay to prevent overloading the backend.'
       );
       this.backoff.resetToMax();
-    } else if (error && error.code === Code.UNAUTHENTICATED) {
-      // "unauthenticated" error means the token was rejected. Try force refreshing it in case it
-      // just expired.
-      this.credentialsProvider.invalidateToken();
+    } else if (
+      error &&
+      error.code === Code.UNAUTHENTICATED &&
+      this.state !== PersistentStreamState.Healthy
+    ) {
+      // "unauthenticated" error means the token was rejected. This should rarely
+      // happen since both Auth and AppCheck ensure a sufficient TTL when we
+      // request a token. If a user manually resets their system clock this can
+      // fail, however. In this case, we should get a Code.UNAUTHENTICATED error
+      // before we received the first message and we need to invalidate the token
+      // to ensure that we fetch a new token.
+      this.authCredentialsProvider.invalidateToken();
+      this.appCheckCredentialsProvider.invalidateToken();
     }
 
     // Clean up the underlying stream because we are no longer interested in events.
@@ -384,15 +430,23 @@ export abstract class PersistentStream<
    * connection stream.
    */
   protected abstract startRpc(
-    token: Token | null
+    authToken: Token | null,
+    appCheckToken: Token | null
   ): Stream<SendType, ReceiveType>;
 
   /**
-   * Called after the stream has received a message. The function will be
-   * called on the right queue and must return a Promise.
+   * Called when the stream receives first message.
+   * The function will be called on the right queue and must return a Promise.
    * @param message - The message received from the stream.
    */
-  protected abstract onMessage(message: ReceiveType): Promise<void>;
+  protected abstract onFirst(message: ReceiveType): Promise<void>;
+
+  /**
+   * Called on subsequent messages after the stream has received first message.
+   * The function will be called on the right queue and must return a Promise.
+   * @param message - The message received from the stream.
+   */
+  protected abstract onNext(message: ReceiveType): Promise<void>;
 
   private auth(): void {
     debugAssert(
@@ -407,8 +461,11 @@ export abstract class PersistentStream<
     // TODO(mikelehen): Just use dispatchIfNotClosed, but see TODO below.
     const closeCount = this.closeCount;
 
-    this.credentialsProvider.getToken().then(
-      token => {
+    Promise.all([
+      this.authCredentialsProvider.getToken(),
+      this.appCheckCredentialsProvider.getToken()
+    ]).then(
+      ([authToken, appCheckToken]) => {
         // Stream can be stopped while waiting for authentication.
         // TODO(mikelehen): We really should just use dispatchIfNotClosed
         // and let this dispatch onto the queue, but that opened a spec test can
@@ -417,7 +474,7 @@ export abstract class PersistentStream<
           // Normally we'd have to schedule the callback on the AsyncQueue.
           // However, the following calls are safe to be called outside the
           // AsyncQueue since they don't chain asynchronous calls
-          this.startStream(token);
+          this.startStream(authToken, appCheckToken);
         }
       },
       (error: Error) => {
@@ -432,7 +489,10 @@ export abstract class PersistentStream<
     );
   }
 
-  private startStream(token: Token | null): void {
+  private startStream(
+    authToken: Token | null,
+    appCheckToken: Token | null
+  ): void {
     debugAssert(
       this.state === PersistentStreamState.Starting,
       'Trying to start stream in a non-starting state'
@@ -440,7 +500,10 @@ export abstract class PersistentStream<
 
     const dispatchIfNotClosed = this.getCloseGuardedDispatcher(this.closeCount);
 
-    this.stream = this.startRpc(token);
+    this.stream = this.startRpc(authToken, appCheckToken);
+    this.stream.onConnected(() => {
+      dispatchIfNotClosed(() => this.listener!.onConnected());
+    });
     this.stream.onOpen(() => {
       dispatchIfNotClosed(() => {
         debugAssert(
@@ -448,6 +511,20 @@ export abstract class PersistentStream<
           'Expected stream to be in state Starting, but was ' + this.state
         );
         this.state = PersistentStreamState.Open;
+        debugAssert(
+          this.healthCheck === null,
+          'Expected healthCheck to be null'
+        );
+        this.healthCheck = this.queue.enqueueAfterDelay(
+          this.healthTimerId,
+          HEALTHY_TIMEOUT_MS,
+          () => {
+            if (this.isOpen()) {
+              this.state = PersistentStreamState.Healthy;
+            }
+            return Promise.resolve();
+          }
+        );
         return this.listener!.onOpen();
       });
     });
@@ -458,7 +535,11 @@ export abstract class PersistentStream<
     });
     this.stream.onMessage((msg: ReceiveType) => {
       dispatchIfNotClosed(() => {
-        return this.onMessage(msg);
+        if (++this.responseCount === 1) {
+          return this.onFirst(msg);
+        } else {
+          return this.onNext(msg);
+        }
       });
     });
   }
@@ -551,7 +632,8 @@ export class PersistentListenStream extends PersistentStream<
   constructor(
     queue: AsyncQueue,
     connection: Connection,
-    credentials: CredentialsProvider,
+    authCredentials: CredentialsProvider<User>,
+    appCheckCredentials: CredentialsProvider<string>,
     private serializer: JsonProtoSerializer,
     listener: WatchStreamListener
   ) {
@@ -559,22 +641,30 @@ export class PersistentListenStream extends PersistentStream<
       queue,
       TimerId.ListenStreamConnectionBackoff,
       TimerId.ListenStreamIdle,
+      TimerId.HealthCheckTimeout,
       connection,
-      credentials,
+      authCredentials,
+      appCheckCredentials,
       listener
     );
   }
 
   protected startRpc(
-    token: Token | null
+    authToken: Token | null,
+    appCheckToken: Token | null
   ): Stream<ProtoListenRequest, ProtoListenResponse> {
     return this.connection.openStream<ProtoListenRequest, ProtoListenResponse>(
       'Listen',
-      token
+      authToken,
+      appCheckToken
     );
   }
 
-  protected onMessage(watchChangeProto: ProtoListenResponse): Promise<void> {
+  protected onFirst(watchChangeProto: ProtoListenResponse): Promise<void> {
+    return this.onNext(watchChangeProto);
+  }
+
+  protected onNext(watchChangeProto: ProtoListenResponse): Promise<void> {
     // A successful response means the stream is healthy
     this.backoff.reset();
 
@@ -654,12 +744,11 @@ export class PersistentWriteStream extends PersistentStream<
   ProtoWriteResponse,
   WriteStreamListener
 > {
-  private handshakeComplete_ = false;
-
   constructor(
     queue: AsyncQueue,
     connection: Connection,
-    credentials: CredentialsProvider,
+    authCredentials: CredentialsProvider<User>,
+    appCheckCredentials: CredentialsProvider<string>,
     private serializer: JsonProtoSerializer,
     listener: WriteStreamListener
   ) {
@@ -667,8 +756,10 @@ export class PersistentWriteStream extends PersistentStream<
       queue,
       TimerId.WriteStreamConnectionBackoff,
       TimerId.WriteStreamIdle,
+      TimerId.HealthCheckTimeout,
       connection,
-      credentials,
+      authCredentials,
+      appCheckCredentials,
       listener
     );
   }
@@ -688,32 +779,49 @@ export class PersistentWriteStream extends PersistentStream<
    * the stream is ready to accept mutations.
    */
   get handshakeComplete(): boolean {
-    return this.handshakeComplete_;
+    return this.responseCount > 0;
   }
 
   // Override of PersistentStream.start
   start(): void {
-    this.handshakeComplete_ = false;
     this.lastStreamToken = undefined;
     super.start();
   }
 
   protected tearDown(): void {
-    if (this.handshakeComplete_) {
+    if (this.handshakeComplete) {
       this.writeMutations([]);
     }
   }
 
   protected startRpc(
-    token: Token | null
+    authToken: Token | null,
+    appCheckToken: Token | null
   ): Stream<ProtoWriteRequest, ProtoWriteResponse> {
     return this.connection.openStream<ProtoWriteRequest, ProtoWriteResponse>(
       'Write',
-      token
+      authToken,
+      appCheckToken
     );
   }
 
-  protected onMessage(responseProto: ProtoWriteResponse): Promise<void> {
+  protected onFirst(responseProto: ProtoWriteResponse): Promise<void> {
+    // Always capture the last stream token.
+    hardAssert(
+      !!responseProto.streamToken,
+      'Got a write handshake response without a stream token'
+    );
+    this.lastStreamToken = responseProto.streamToken;
+
+    // The first response is always the handshake response
+    hardAssert(
+      !responseProto.writeResults || responseProto.writeResults.length === 0,
+      'Got mutation results for handshake'
+    );
+    return this.listener!.onHandshakeComplete();
+  }
+
+  protected onNext(responseProto: ProtoWriteResponse): Promise<void> {
     // Always capture the last stream token.
     hardAssert(
       !!responseProto.streamToken,
@@ -721,27 +829,17 @@ export class PersistentWriteStream extends PersistentStream<
     );
     this.lastStreamToken = responseProto.streamToken;
 
-    if (!this.handshakeComplete_) {
-      // The first response is always the handshake response
-      hardAssert(
-        !responseProto.writeResults || responseProto.writeResults.length === 0,
-        'Got mutation results for handshake'
-      );
-      this.handshakeComplete_ = true;
-      return this.listener!.onHandshakeComplete();
-    } else {
-      // A successful first write response means the stream is healthy,
-      // Note, that we could consider a successful handshake healthy, however,
-      // the write itself might be causing an error we want to back off from.
-      this.backoff.reset();
+    // A successful first write response means the stream is healthy,
+    // Note, that we could consider a successful handshake healthy, however,
+    // the write itself might be causing an error we want to back off from.
+    this.backoff.reset();
 
-      const results = fromWriteResults(
-        responseProto.writeResults,
-        responseProto.commitTime
-      );
-      const commitVersion = fromVersion(responseProto.commitTime!);
-      return this.listener!.onMutationResult(commitVersion, results);
-    }
+    const results = fromWriteResults(
+      responseProto.writeResults,
+      responseProto.commitTime
+    );
+    const commitVersion = fromVersion(responseProto.commitTime!);
+    return this.listener!.onMutationResult(commitVersion, results);
   }
 
   /**
@@ -751,7 +849,7 @@ export class PersistentWriteStream extends PersistentStream<
    */
   writeHandshake(): void {
     debugAssert(this.isOpen(), 'Writing handshake requires an opened stream');
-    debugAssert(!this.handshakeComplete_, 'Handshake already completed');
+    debugAssert(!this.handshakeComplete, 'Handshake already completed');
     debugAssert(
       !this.lastStreamToken,
       'Stream token should be empty during handshake'
@@ -767,7 +865,7 @@ export class PersistentWriteStream extends PersistentStream<
   writeMutations(mutations: Mutation[]): void {
     debugAssert(this.isOpen(), 'Writing mutations requires an opened stream');
     debugAssert(
-      this.handshakeComplete_,
+      this.handshakeComplete,
       'Handshake must be complete before writing mutations'
     );
     debugAssert(

@@ -16,9 +16,9 @@
  */
 
 import { expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
+import sinonChai from 'sinon-chai';
 
 import { FirebaseError } from '@firebase/util';
 
@@ -33,13 +33,14 @@ use(chaiAsPromised);
 describe('platform_browser/iframe/gapi', () => {
   let library: typeof gapi;
   let auth: TestAuth;
+  let loadJsStub: sinon.SinonStub;
   function onJsLoad(globalLoadFnName: string): void {
     _window().gapi = library as typeof gapi;
     _window()[globalLoadFnName]();
   }
 
   beforeEach(async () => {
-    sinon.stub(js, '_loadJS').callsFake(url => {
+    loadJsStub = sinon.stub(js, '_loadJS').callsFake(url => {
       onJsLoad(url.split('onload=')[1]);
       return Promise.resolve(new Event('load'));
     });
@@ -49,7 +50,7 @@ describe('platform_browser/iframe/gapi', () => {
 
   function makeGapi(result: unknown, timesout = false): typeof gapi {
     const callbackFn = timesout === false ? 'callback' : 'ontimeout';
-    return ({
+    return {
       load: sinon
         .stub()
         .callsFake((_name: string, params: Record<string, () => void>) =>
@@ -58,7 +59,7 @@ describe('platform_browser/iframe/gapi', () => {
       iframes: {
         getContext: () => result as gapi.iframes.Context
       }
-    } as unknown) as typeof gapi;
+    } as unknown as typeof gapi;
   }
 
   afterEach(() => {
@@ -133,5 +134,11 @@ describe('platform_browser/iframe/gapi', () => {
       'auth/network-request-failed'
     );
     expect(_loadGapi(auth)).not.to.eq(firstAttempt);
+  });
+
+  it('rejects if gapi itself does not load', async () => {
+    const error = new Error();
+    loadJsStub.rejects(error);
+    await expect(_loadGapi(auth)).to.be.rejectedWith(error);
   });
 });

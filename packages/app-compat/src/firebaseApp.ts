@@ -59,7 +59,7 @@ export interface _FirebaseApp {
 /**
  * Global context object for a collection of services using
  * a shared authentication state.
- * 
+ *
  * marked as internal because it references internal types exported from @firebase/app
  * @internal
  */
@@ -125,7 +125,7 @@ export class FirebaseAppImpl implements Compat<_FirebaseAppExp>, _FirebaseApp {
   ): _FirebaseService {
     this._delegate.checkDestroyed();
 
-    // Initialize instance if InstatiationMode is `EXPLICIT`.
+    // Initialize instance if InstantiationMode is `EXPLICIT`.
     const provider = this._delegate.container.getProvider(name as Name);
     if (
       !provider.isInitialized() &&
@@ -135,9 +135,9 @@ export class FirebaseAppImpl implements Compat<_FirebaseAppExp>, _FirebaseApp {
     }
 
     // getImmediate will always succeed because _getService is only called for registered components.
-    return (provider.getImmediate({
+    return provider.getImmediate({
       identifier: instanceIdentifier
-    }) as unknown) as _FirebaseService;
+    }) as unknown as _FirebaseService;
   }
 
   /**

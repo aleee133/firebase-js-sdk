@@ -29,7 +29,8 @@ import {
   FcmEvent,
   LogEvent,
   LogRequest,
-  LogResponse
+  LogResponse,
+  ComplianceData
 } from '../interfaces/logging-types';
 
 import { MessagePayloadInternal } from '../interfaces/internal-message-payload';
@@ -162,7 +163,7 @@ export async function stageLog(
     await messaging.firebaseDependencies.installations.getId()
   );
 
-  createAndEnqueueLogEvent(messaging, fcmEvent);
+  createAndEnqueueLogEvent(messaging, fcmEvent, internalPayload.productId);
 }
 
 function createFcmEvent(
@@ -177,8 +178,8 @@ function createFcmEvent(
     fcmEvent.project_number = internalPayload.from;
   }
 
-  if (!!internalPayload.fcm_message_id) {
-    fcmEvent.message_id = internalPayload.fcm_message_id;
+  if (!!internalPayload.fcmMessageId) {
+    fcmEvent.message_id = internalPayload.fcmMessageId;
   }
 
   fcmEvent.instance_id = fid;
@@ -208,16 +209,33 @@ function createFcmEvent(
 
 function createAndEnqueueLogEvent(
   messaging: MessagingService,
-  fcmEvent: FcmEvent
+  fcmEvent: FcmEvent,
+  productId: number
 ): void {
   const logEvent = {} as LogEvent;
 
   /* eslint-disable camelcase */
   logEvent.event_time_ms = Math.floor(Date.now()).toString();
   logEvent.source_extension_json_proto3 = JSON.stringify(fcmEvent);
+
+  if (!!productId) {
+    logEvent.compliance_data = buildComplianceData(productId);
+  }
   // eslint-disable-next-line camelcase
 
   messaging.logEvents.push(logEvent);
+}
+
+function buildComplianceData(productId: number): ComplianceData {
+  const complianceData: ComplianceData = {
+    privacy_context: {
+      prequest: {
+        origin_associated_product_id: productId
+      }
+    }
+  };
+
+  return complianceData;
 }
 
 export function _createLogRequest(logEventQueue: LogEvent[]): LogRequest {

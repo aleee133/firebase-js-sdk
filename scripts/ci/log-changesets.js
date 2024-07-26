@@ -43,15 +43,12 @@ async function logChangesets() {
     return;
   }
 
-  const data = JSON.stringify({
+  const data = {
     version,
     pr: prPayload.pull_request.number
-  });
+  };
 
   const options = {
-    hostname: 'us-central1-feature-tracker-8ca2b.cloudfunctions.net',
-    path: '/logChangesetPR',
-    port: 443,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -60,18 +57,22 @@ async function logChangesets() {
 
   return new Promise((resolve, reject) => {
     console.log(`Logging PR ${data.pr} with version ${data.version}.`);
-    const req = https.request(options, res => {
-      res.on('data', d => {
-        process.stdout.write(d);
-      });
-      res.on('end', resolve);
-    });
+    const req = https.request(
+      `${process.env.RELEASE_TRACKER_URL}/logChangesetPR`,
+      options,
+      res => {
+        res.on('data', d => {
+          process.stdout.write(d);
+        });
+        res.on('end', resolve);
+      }
+    );
 
     req.on('error', error => reject(error));
 
-    req.write(data);
+    req.write(JSON.stringify(data), err => reject(err));
     req.end();
   });
 }
 
-logChangesets();
+logChangesets().catch(e => console.error(e));
